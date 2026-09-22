@@ -1,0 +1,4 @@
+/target
+/dart/ihs_wayland_server/.dart_tool/
+/dart/ihs_wayland_server/build/
+/dart/ihs_wayland_server/pubspec.lock
