@@ -1,0 +1,42 @@
+[package]
+name = "ihs_wl_server"
+version = "0.1.0"
+edition = "2021"
+# Keep in sync with rust-toolchain.toml (meta-lts-mixins scarthgap/rust).
+rust-version = "1.98.1"
+license = "Apache-2.0"
+description = "Embedded Wayland server (smithay) that hands client surfaces to ivi-homescreen as zero-copy platform-view layers"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+
+[dependencies.smithay]
+version = "=0.7.0"
+default-features = false
+# The module never renders -- the shell is the only compositor -- so no
+# renderer_*, backend_egl or backend_vulkan. backend_drm is for the syncobj DrmDeviceFd, backend_gbm for
+# SHM staging buffers only. No libinput/udev/session/winit/x11/xwayland: the
+# shell owns DRM master, the session and input devices.
+features = [
+    "wayland_frontend",
+    "desktop",
+    "backend_drm",
+    "backend_gbm",
+]
+
+[build-dependencies]
+bindgen = "0.72"
+pkg-config = "0.3"
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[profile.release]
+debug = "line-tables-only"
