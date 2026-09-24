@@ -9,12 +9,26 @@
 //! the shell render on. Render nodes only: opening a primary node could
 //! contend with the shell for DRM master.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 
 use smithay::backend::drm::DrmDeviceFd;
 use smithay::utils::DeviceFd;
-use smithay::wayland::drm_syncobj::supports_syncobj_eventfd;
+
+/// Whether @p node can make eventfds for syncobj points. Asked of the file
+/// directly: smithay's own check needs a DrmDeviceFd, whose constructor
+/// tries for DRM master and warns when a render node refuses, as they
+/// always do.
+fn supports_syncobj_eventfd(node: &File) -> bool {
+    // Handle 0 is never valid: a device with the ioctl answers ENOENT, one
+    // without it (or without timeline syncobjs) something else. The fd
+    // stands in for the eventfd, since drm-ffi needs a valid one.
+    match drm_ffi::syncobj::eventfd(node.as_fd(), 0, 0, node.as_fd(), false) {
+        Ok(_) => false,
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    }
+}
 
 /// Render nodes to try, in order: `IHS_WL_SYNCOBJ_DEVICE` alone when set,
 /// else every `/dev/dri/renderD*`.
@@ -57,12 +71,14 @@ pub fn device() -> Option<DrmDeviceFd> {
                 continue;
             }
         };
-        let device = DrmDeviceFd::new(DeviceFd::from(std::os::fd::OwnedFd::from(file)));
-        if supports_syncobj_eventfd(&device) {
-            tracing::info!(?path, "explicit sync over");
-            return Some(device);
+        if !supports_syncobj_eventfd(&file) {
+            tracing::debug!(?path, "no syncobj eventfd");
+            continue;
         }
-        tracing::debug!(?path, "no syncobj eventfd");
+        tracing::info!(?path, "explicit sync over");
+        return Some(DrmDeviceFd::new(DeviceFd::from(
+            std::os::fd::OwnedFd::from(file),
+        )));
     }
     tracing::info!("no render node with syncobj eventfd; explicit sync not offered");
     None
