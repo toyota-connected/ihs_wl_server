@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! Run the server with no shell, for poking at it with real clients:
 //!
 //!   cargo run --example standalone -- [socket-name] [seconds]

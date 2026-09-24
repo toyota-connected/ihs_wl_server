@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! Routes `tracing` (ours and smithay's) into `ihs_log`, so the module's
 //! records land in whatever sink the shell selected (DLT, console, file).
 //!

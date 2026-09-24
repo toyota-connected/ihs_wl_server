@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! The compositor thread and its process-global handle.
 //!
 //! One thread owns the calloop loop, the `Display` and all smithay state.

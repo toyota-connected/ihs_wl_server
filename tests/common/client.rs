@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! A minimal xdg-shell client: the in-tree equivalent of weston-simple-shm
 //! (one toplevel, one ARGB shm buffer) and of weston-simple-dmabuf (a
 //! toplevel, optionally with a subsurface, over linux-dmabuf buffers).

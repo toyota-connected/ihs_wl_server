@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! ihs_wl_server: an embedded Wayland server (smithay) that hands each client
 //! toplevel's surfaces to ivi-homescreen as zero-copy platform-view layers.
 //! The shell is the only compositor; this module never renders.

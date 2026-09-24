@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::reexports::calloop::Interest;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_surface::WlSurface};

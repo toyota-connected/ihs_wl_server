@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 // Generates Rust bindings for the installed ivi-homescreen shared ABI
 // (ihs/*.h) and links libihs_shared.so.1 through ivi-homescreen-shared.pc.
 // The build is kept out of the shell's CMake on purpose, so it cross-compiles
