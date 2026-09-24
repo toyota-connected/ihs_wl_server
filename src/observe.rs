@@ -36,6 +36,11 @@ pub enum Observed {
         view_id: i32,
         buffer_id: u32,
     },
+    /// A disconnected client's commits were still waiting for @p count
+    /// buffers; the waits are dropped.
+    WaitsDropped {
+        count: usize,
+    },
 }
 
 pub type Observer = Arc<dyn Fn(&Observed) + Send + Sync>;

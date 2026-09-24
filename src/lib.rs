@@ -29,6 +29,7 @@ mod pacing;
 mod params;
 mod state;
 mod submit;
+mod syncobj;
 mod thread;
 mod timing;
 mod tree;

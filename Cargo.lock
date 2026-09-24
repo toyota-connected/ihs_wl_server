@@ -360,6 +360,7 @@ name = "ihs_wl_server"
 version = "0.1.0"
 dependencies = [
  "bindgen",
+ "drm-ffi",
  "libc",
  "pkg-config",
  "smithay",

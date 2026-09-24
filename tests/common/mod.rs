@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod client;
+pub mod drm;
 pub mod harness;
 pub mod mock_host;
 
