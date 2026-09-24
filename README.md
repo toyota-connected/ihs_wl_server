@@ -138,4 +138,5 @@ dma-bufs, the client uses memfds; the server never reads buffer contents.
 
 ## License
 
-Apache-2.0
+Apache-2.0; see [LICENSE](LICENSE). Each source file carries an SPDX
+header.
