@@ -12,6 +12,8 @@ use std::cell::RefCell;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{self, AssertUnwindSafe};
 
+mod buffers;
+mod caps;
 mod config;
 mod error;
 #[doc(hidden)]
@@ -20,8 +22,11 @@ mod handlers;
 mod log;
 #[doc(hidden)]
 pub mod observe;
+mod params;
 mod state;
+mod submit;
 mod thread;
+mod tree;
 mod view;
 
 pub use config::Config;

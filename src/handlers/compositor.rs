@@ -24,10 +24,14 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         if compositor::is_sync_subsurface(surface) {
+            // Applied with its parent's commit, which submits the tree.
             return;
         }
         self.toplevel_commit(surface);
         self.popup_commit(surface);
+        if let Some(view_id) = self.bound_view_of(surface) {
+            self.submit_view(view_id);
+        }
     }
 }
 
@@ -48,6 +52,7 @@ impl State {
             let (app_id, title) = app_id_and_title(surface);
             tracing::info!(id, app_id, title, "toplevel mapped");
             observe::emit(Observed::ToplevelMapped { app_id, title });
+            self.bind_waiting_views();
         }
     }
 
@@ -72,7 +77,9 @@ impl State {
 }
 
 impl BufferHandler for State {
-    fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
+    fn buffer_destroyed(&mut self, buffer: &wl_buffer::WlBuffer) {
+        self.retire_buffer(buffer);
+    }
 }
 
 impl ShmHandler for State {

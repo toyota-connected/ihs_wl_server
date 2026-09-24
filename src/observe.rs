@@ -7,10 +7,32 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Observed {
     ClientCount(u32),
-    ToplevelMapped { app_id: String, title: String },
-    ToplevelUnmapped { app_id: String },
-    ViewCreated { view_id: i32 },
-    ViewDisposed { view_id: i32 },
+    ToplevelMapped {
+        app_id: String,
+        title: String,
+    },
+    ToplevelUnmapped {
+        app_id: String,
+    },
+    ViewCreated {
+        view_id: i32,
+    },
+    ViewDisposed {
+        view_id: i32,
+    },
+    ViewBound {
+        view_id: i32,
+        toplevel_id: i64,
+    },
+    Submitted {
+        view_id: i32,
+        seq: u64,
+        layers: usize,
+    },
+    Retired {
+        view_id: i32,
+        buffer_id: u32,
+    },
 }
 
 pub type Observer = Arc<dyn Fn(&Observed) + Send + Sync>;

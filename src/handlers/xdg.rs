@@ -22,6 +22,7 @@ impl XdgShellHandler for State {
         let Some(id) = Toplevels::id_of(surface.wl_surface()) else {
             return;
         };
+        self.unbind_toplevel(id);
         if let Some(entry) = self.toplevels.by_id.remove(&id) {
             if entry.mapped {
                 let (app_id, _) = app_id_and_title(surface.wl_surface());

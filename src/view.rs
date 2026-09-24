@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::ffi::ihs::sys;
 use crate::observe::{self, Observed};
+use crate::params::ViewParams;
 use crate::thread::{self, Cmd};
 
 pub const VIEW_TYPE: &CStr = c"ihs_wl/toplevel";
@@ -29,6 +30,8 @@ unsafe impl Send for ViewLink {}
 pub struct ViewShared {
     /// The Flutter platform-view id, which also keys input.
     pub id: i32,
+    /// What the widget passed in creationParams: what to bind to.
+    pub params: ViewParams,
     pub link: Mutex<Option<ViewLink>>,
 }
 
@@ -117,8 +120,17 @@ unsafe extern "C" fn factory(
             "view created"
         );
 
+        let params = if (*info).params.is_null() || (*info).params_size == 0 {
+            ViewParams::default()
+        } else {
+            ViewParams::decode(std::slice::from_raw_parts(
+                (*info).params,
+                (*info).params_size,
+            ))
+        };
         let shared = Arc::new(ViewShared {
             id,
+            params,
             link: Mutex::new(Some(ViewLink { view, grant })),
         });
         if let Err(e) = thread::send(Cmd::ViewCreated(shared.clone())) {
@@ -135,6 +147,8 @@ unsafe extern "C" fn factory(
             set_suspended: Some(on_set_suspended),
             renegotiate: Some(on_renegotiate),
             dispose: Some(on_dispose),
+            presented: Some(on_presented),
+            scanout_hint: None,
         };
         *out_user_data = Arc::into_raw(shared) as *mut c_void;
         observe::emit(Observed::ViewCreated { view_id: id });
@@ -160,7 +174,31 @@ fn callback(name: &str, f: impl FnOnce()) {
 unsafe extern "C" fn on_resize(user_data: *mut c_void, width: f64, height: f64) {
     callback("resize", || {
         let view = shared(user_data);
-        tracing::debug!(id = view.id, width, height, "resize"); // becomes xdg_toplevel.configure
+        tracing::debug!(id = view.id, width, height, "resize");
+        let _ = thread::send(Cmd::ViewResized {
+            view_id: view.id,
+            width: width.round() as i32,
+            height: height.round() as i32,
+        });
+    });
+}
+
+/// The shell's display thread: a frame of this view reached the screen.
+unsafe extern "C" fn on_presented(
+    user_data: *mut c_void,
+    seq: u64,
+    ust_ns: u64,
+    _refresh_ns: u32,
+    _msc: u64,
+    _flags: u32,
+) {
+    callback("presented", || {
+        let view = shared(user_data);
+        let _ = thread::send(Cmd::Presented {
+            view_id: view.id,
+            seq,
+            ust_ns,
+        });
     });
 }
 

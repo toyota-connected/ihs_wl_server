@@ -30,6 +30,11 @@ impl Recorder {
         rec
     }
 
+    /// Everything seen so far.
+    pub fn events(&self) -> Vec<Observed> {
+        self.0 .0.lock().unwrap().clone()
+    }
+
     /// Wait until an event matching `pred` has been seen.
     pub fn wait_for(&self, what: &str, pred: impl Fn(&Observed) -> bool) -> Observed {
         let (events, cv) = &*self.0;
