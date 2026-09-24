@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, FromRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
@@ -151,9 +151,23 @@ impl Client {
     /// A linux-dmabuf buffer of @p width x @p height XRGB8888 over a memfd.
     /// Returns its index.
     pub fn new_dmabuf(&mut self, width: i32, height: i32) -> usize {
+        let file = memfd((width * 4 * height) as usize);
+        self.dmabuf_over(file, width, height)
+    }
+
+    /// A "dma-buf" still being rendered into: its plane is the read end of a
+    /// pipe, which polls ready -- the rendering done -- only once something
+    /// is written to the returned write end. Returns its index.
+    pub fn new_pending_dmabuf(&mut self, width: i32, height: i32) -> (usize, File) {
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        let (read, write) = unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
+        (self.dmabuf_over(read, width, height), write)
+    }
+
+    fn dmabuf_over(&mut self, file: File, width: i32, height: i32) -> usize {
         let qh = self.queue.handle();
         let stride = width * 4;
-        let file = memfd((stride * height) as usize);
         let params = self
             .app
             .dmabuf
@@ -269,7 +283,6 @@ impl Client {
 }
 
 fn memfd(size: usize) -> File {
-    use std::os::fd::FromRawFd;
     let fd = unsafe { libc::memfd_create(c"ihs-wl-test".as_ptr(), libc::MFD_CLOEXEC) };
     assert!(fd >= 0);
     let file = unsafe { File::from_raw_fd(fd) };

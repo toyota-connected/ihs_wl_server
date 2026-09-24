@@ -349,3 +349,46 @@ fn a_client_that_exits_has_its_buffers_retired() {
     }
     mock_host::dispose_view(9);
 }
+
+/// A commit whose buffer is still being rendered into is held until the
+/// rendering is done, so the shell is never handed an unfinished buffer.
+#[test]
+fn a_commit_waits_for_its_buffer_to_be_ready() {
+    use std::io::Write;
+
+    let _serial = serial();
+    let mut h = Harness::new("ihs-wl-test-ready");
+    h.client.create_toplevel("org.example.g", "g");
+    let a = h.client.new_dmabuf(32, 32);
+    h.client.commit_buffer(a, false);
+    assert_eq!(
+        mock_host::create_view_with_params(
+            "ihs_wl/toplevel",
+            10,
+            32.0,
+            32.0,
+            &params("org.example.g")
+        ),
+        0
+    );
+    let id_a = h.wait_submissions(10, 1)[0].layers[0].buffer_id;
+
+    let (b, mut rendering) = h.client.new_pending_dmabuf(32, 32);
+    h.client.commit_buffer(b, true);
+    // The commit has been processed (commit_buffer round-trips) but not
+    // applied: nothing new reaches the view, and a stays on screen.
+    h.client.roundtrip();
+    assert_eq!(
+        Harness::submissions(10).len(),
+        1,
+        "an unready buffer was submitted"
+    );
+
+    rendering.write_all(&[0]).unwrap();
+    let subs = h.wait_submissions(10, 2);
+    assert_ne!(
+        subs[1].layers[0].buffer_id, id_a,
+        "the ready buffer was not shown"
+    );
+    mock_host::dispose_view(10);
+}

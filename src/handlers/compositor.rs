@@ -1,10 +1,13 @@
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
+use smithay::reexports::calloop::Interest;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_surface::WlSurface};
-use smithay::reexports::wayland_server::Client;
+use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    self, CompositorClientState, CompositorHandler, CompositorState,
+    self, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
+    SurfaceAttributes,
 };
+use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{delegate_compositor, delegate_shm};
@@ -19,6 +22,12 @@ impl CompositorHandler for State {
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         &client.get_data::<ClientState>().unwrap().compositor_state
+    }
+
+    fn new_surface(&mut self, surface: &WlSurface) {
+        compositor::add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
+            state.gate_on_readiness(surface);
+        });
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -36,6 +45,43 @@ impl CompositorHandler for State {
 }
 
 impl State {
+    /// Hold a commit that attaches a dma-buf until the client's rendering
+    /// into it is done, so the shell is only ever handed finished buffers and
+    /// needs no acquire fence. The buffer's implicit fence decides: its fds
+    /// poll readable once every write to it has completed.
+    fn gate_on_readiness(&mut self, surface: &WlSurface) {
+        let dmabuf = compositor::with_states(surface, |states| {
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            match attrs.pending().buffer.as_ref() {
+                Some(BufferAssignment::NewBuffer(buffer)) => get_dmabuf(buffer).ok().cloned(),
+                _ => None,
+            }
+        });
+        let Some(dmabuf) = dmabuf else {
+            return;
+        };
+        // Already done: nothing to wait for.
+        let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else {
+            return;
+        };
+        let Some(client) = surface.client() else {
+            return;
+        };
+        let inserted = self.loop_handle.insert_source(source, move |_, _, state| {
+            let dh = state.dh.clone();
+            state
+                .client_compositor_state(&client)
+                .blocker_cleared(state, &dh);
+            Ok(())
+        });
+        match inserted {
+            Ok(_) => compositor::add_blocker(surface, blocker),
+            // Without a source nothing would ever clear the blocker; let the
+            // commit through rather than wedge the client.
+            Err(e) => tracing::warn!("readiness source: {e}"),
+        }
+    }
+
     fn toplevel_commit(&mut self, surface: &WlSurface) {
         let Some(id) = Toplevels::id_of(surface) else {
             return;
