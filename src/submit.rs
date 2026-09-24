@@ -22,11 +22,13 @@ use smithay::backend::renderer::utils::Buffer;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::{self, SurfaceAttributes, TraversalAction};
 
 use crate::ffi::ihs::sys;
 use crate::observe::{self, Observed};
 use crate::state::State;
+use crate::timing::Taken;
 use crate::tree::{self, LayerSpec};
 
 /// Buffers held without a fence, per view, before the oldest goes back.
@@ -186,7 +188,8 @@ fn layer_for(spec: &LayerSpec, frame: &sys::IhsFrame) -> sys::IhsLayer {
 }
 
 impl State {
-    /// Hand the view's toplevel tree, as it now stands, to the shell.
+    /// Hand the view's toplevel tree, as it now stands, to the shell, with
+    /// what its updates wait on the screen for.
     pub fn submit_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
@@ -194,7 +197,28 @@ impl State {
         let Some(toplevel) = entry.toplevel.and_then(|id| self.toplevels.by_id.get(&id)) else {
             return;
         };
-        let built = tree::build(toplevel.surface.wl_surface());
+        let root = toplevel.surface.wl_surface().clone();
+        let taken = Taken::from_tree(&root);
+        let Some((seq, shown)) = self.submit_tree(view_id, &root) else {
+            self.hold_loose(root.client(), taken.not_shown());
+            return;
+        };
+        let has_barriers = taken.has_barriers();
+        let entry = self.views.get_mut(&view_id).unwrap();
+        if entry.frames.push(seq, shown, taken) {
+            if let Some(client) = root.client() {
+                self.unblock(&client);
+            }
+        }
+        if has_barriers {
+            self.watch_frames(view_id);
+        }
+    }
+
+    /// Submit the layers of the tree at @p root; the seq it went as, and the
+    /// (layer id, content generation) of each layer.
+    fn submit_tree(&mut self, view_id: i32, root: &WlSurface) -> Option<(u64, Vec<(u32, u64)>)> {
+        let built = tree::build(root);
         if built.skipped_non_dmabuf > 0 {
             tracing::debug!(
                 view_id,
@@ -203,7 +227,7 @@ impl State {
             );
         }
         if built.layers.is_empty() {
-            return;
+            return None;
         }
         if built.layers.len() > sys::IHS_PV_MAX_LAYERS as usize {
             tracing::warn!(
@@ -226,7 +250,7 @@ impl State {
                 Some(frame) => frames.push(frame),
                 None => {
                     frames.iter().for_each(close_frame);
-                    return;
+                    return None;
                 }
             }
         }
@@ -257,7 +281,7 @@ impl State {
                 None => {
                     // Disposed since the command queue last looked.
                     frames.iter().for_each(close_frame);
-                    return;
+                    return None;
                 }
             }
         };
@@ -267,10 +291,11 @@ impl State {
             for fd in release.into_iter().filter(|&fd| fd >= 0) {
                 drop(unsafe { OwnedFd::from_raw_fd(fd) });
             }
-            return;
+            return None;
         }
         entry.seq = seq;
         let n = specs.len();
+        let shown: Vec<(u32, u64)> = specs.iter().map(|s| (s.layer_id, s.generation)).collect();
         for (spec, fd) in specs.into_iter().zip(release) {
             if fd >= 0 {
                 // SAFETY: the registry hands ownership of the fence over.
@@ -287,6 +312,7 @@ impl State {
             seq,
             layers: n,
         });
+        Some((seq, shown))
     }
 
     /// The client destroyed a buffer: every view it was shown in drops its

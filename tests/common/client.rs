@@ -19,9 +19,14 @@ use wayland_client::protocol::{
     wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_protocols::wp::commit_timing::v1::client::{
+    wp_commit_timer_v1, wp_commit_timing_manager_v1,
+};
+use wayland_protocols::wp::fifo::v1::client::{wp_fifo_manager_v1, wp_fifo_v1};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1,
 };
+use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 #[derive(Default)]
@@ -38,6 +43,24 @@ struct App {
     /// wl_buffer.release events, by the client's buffer index.
     released: HashMap<usize, u32>,
     frames_done: u32,
+    presentation: Option<wp_presentation::WpPresentation>,
+    presentation_clock: Option<u32>,
+    fifo_manager: Option<wp_fifo_manager_v1::WpFifoManagerV1>,
+    timing_manager: Option<wp_commit_timing_manager_v1::WpCommitTimingManagerV1>,
+    /// Presentation feedback outcomes, by the tag they were asked with.
+    feedback: HashMap<usize, Feedback>,
+}
+
+/// What a wp_presentation_feedback came to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Feedback {
+    Presented {
+        time_ns: u64,
+        refresh_ns: u32,
+        msc: u64,
+        flags: u32,
+    },
+    Discarded,
 }
 
 /// DRM_FORMAT_XRGB8888.
@@ -52,6 +75,9 @@ pub struct Client {
     /// dma-buf buffers, by index, and the memfds behind them.
     buffers: Vec<Option<(wl_buffer::WlBuffer, File)>>,
     sub_surface: Option<(wl_surface::WlSurface, wl_subsurface::WlSubsurface)>,
+    fifo: Option<wp_fifo_v1::WpFifoV1>,
+    timer: Option<wp_commit_timer_v1::WpCommitTimerV1>,
+    next_feedback: usize,
 }
 
 impl Client {
@@ -72,6 +98,9 @@ impl Client {
             _toplevel: None,
             buffers: Vec::new(),
             sub_surface: None,
+            fifo: None,
+            timer: None,
+            next_feedback: 0,
         }
     }
 
@@ -318,6 +347,13 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.dmabuf = Some(registry.bind(name, version.min(3), qh, ()))
                 }
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
+                "wp_presentation" => {
+                    app.presentation = Some(registry.bind(name, version.min(2), qh, ()))
+                }
+                "wp_fifo_manager_v1" => app.fifo_manager = Some(registry.bind(name, 1, qh, ())),
+                "wp_commit_timing_manager_v1" => {
+                    app.timing_manager = Some(registry.bind(name, 1, qh, ()))
+                }
                 _ => {}
             }
             app.globals.push(interface);
@@ -414,8 +450,143 @@ impl Dispatch<wl_callback::WlCallback, ()> for App {
 }
 
 impl Client {
+    fn surface_of(&self, sub: bool) -> &wl_surface::WlSurface {
+        if sub {
+            &self.sub_surface.as_ref().expect("no subsurface").0
+        } else {
+            self._surface.as_ref().unwrap()
+        }
+    }
+
+    /// Ask for presentation feedback on the next commit of the toplevel
+    /// (or, with @p sub, of the subsurface). Returns its tag.
+    pub fn request_feedback(&mut self, sub: bool) -> usize {
+        let qh = self.queue.handle();
+        let tag = self.next_feedback;
+        self.next_feedback += 1;
+        let presentation = self.app.presentation.as_ref().expect("no wp_presentation");
+        presentation.feedback(self.surface_of(sub), &qh, tag);
+        tag
+    }
+
+    pub fn feedback(&self, tag: usize) -> Option<Feedback> {
+        self.app.feedback.get(&tag).copied()
+    }
+
+    /// The clock wp_presentation announced.
+    pub fn presentation_clock(&self) -> Option<u32> {
+        self.app.presentation_clock
+    }
+
+    /// Attach buffer @p index to the subsurface and commit it.
+    pub fn commit_sub_buffer(&mut self, index: usize) {
+        let (buffer, _) = self.buffers[index].as_ref().unwrap();
+        let surface = &self.sub_surface.as_ref().expect("no subsurface").0;
+        surface.attach(Some(buffer), 0, 0);
+        surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        surface.commit();
+        self.roundtrip();
+    }
+
+    fn fifo(&mut self) -> &wp_fifo_v1::WpFifoV1 {
+        if self.fifo.is_none() {
+            let qh = self.queue.handle();
+            let manager = self
+                .app
+                .fifo_manager
+                .as_ref()
+                .expect("no wp_fifo_manager_v1");
+            self.fifo = Some(manager.get_fifo(self._surface.as_ref().unwrap(), &qh, ()));
+        }
+        self.fifo.as_ref().unwrap()
+    }
+
+    /// The next commit of the toplevel sets a fifo barrier.
+    pub fn fifo_set_barrier(&mut self) {
+        self.fifo().set_barrier();
+    }
+
+    /// The next commit of the toplevel waits for the fifo barrier.
+    pub fn fifo_wait_barrier(&mut self) {
+        self.fifo().wait_barrier();
+    }
+
+    /// The next commit of the toplevel targets CLOCK_MONOTONIC @p ns.
+    pub fn set_target(&mut self, ns: u64) {
+        if self.timer.is_none() {
+            let qh = self.queue.handle();
+            let manager = self
+                .app
+                .timing_manager
+                .as_ref()
+                .expect("no wp_commit_timing_manager_v1");
+            self.timer = Some(manager.get_timer(self._surface.as_ref().unwrap(), &qh, ()));
+        }
+        let secs = ns / 1_000_000_000;
+        self.timer.as_ref().unwrap().set_timestamp(
+            (secs >> 32) as u32,
+            secs as u32,
+            (ns % 1_000_000_000) as u32,
+        );
+    }
+
     /// True once the server has gone away.
     pub fn roundtrip_fails(&mut self) -> bool {
         self.queue.roundtrip(&mut self.app).is_err()
+    }
+}
+
+delegate_noop!(App: ignore wp_fifo_manager_v1::WpFifoManagerV1);
+delegate_noop!(App: ignore wp_fifo_v1::WpFifoV1);
+delegate_noop!(App: ignore wp_commit_timing_manager_v1::WpCommitTimingManagerV1);
+delegate_noop!(App: ignore wp_commit_timer_v1::WpCommitTimerV1);
+
+impl Dispatch<wp_presentation::WpPresentation, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wp_presentation::WpPresentation,
+        event: wp_presentation::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_presentation::Event::ClockId { clk_id } = event {
+            app.presentation_clock = Some(clk_id);
+        }
+    }
+}
+
+impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, usize> for App {
+    fn event(
+        app: &mut Self,
+        _: &wp_presentation_feedback::WpPresentationFeedback,
+        event: wp_presentation_feedback::Event,
+        tag: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let outcome = match event {
+            wp_presentation_feedback::Event::Presented {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                refresh,
+                seq_hi,
+                seq_lo,
+                flags,
+            } => Feedback::Presented {
+                time_ns: (((tv_sec_hi as u64) << 32) | tv_sec_lo as u64) * 1_000_000_000
+                    + tv_nsec as u64,
+                refresh_ns: refresh,
+                msc: ((seq_hi as u64) << 32) | seq_lo as u64,
+                flags: match flags {
+                    wayland_client::WEnum::Value(k) => k.bits(),
+                    wayland_client::WEnum::Unknown(v) => v,
+                },
+            },
+            wp_presentation_feedback::Event::Discarded => Feedback::Discarded,
+            _ => return,
+        };
+        app.feedback.insert(*tag, outcome);
     }
 }

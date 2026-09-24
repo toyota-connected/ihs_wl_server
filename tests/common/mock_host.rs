@@ -415,20 +415,27 @@ pub fn signal_release(buffer_id: u32) {
 
 /// What the display does once a frame of the view is on screen.
 pub fn present(id: i32, seq: u64) {
+    present_at(id, seq, 1_000_000_000 * seq, 16_666_667, seq, 0);
+}
+
+/// present(), with the report spelled out.
+pub fn present_at(id: i32, seq: u64, ust_ns: u64, refresh_ns: u32, msc: u64, flags: u32) {
     let (cb, ud) = with(|r| {
         let v = &r.views[&id];
         (v.callbacks.presented, v.user_data)
     });
     if let Some(presented) = cb {
-        unsafe {
-            presented(
-                ud as *mut c_void,
-                seq,
-                1_000_000_000 * seq,
-                16_666_667,
-                seq,
-                0,
-            )
-        };
+        unsafe { presented(ud as *mut c_void, seq, ust_ns, refresh_ns, msc, flags) };
+    }
+}
+
+/// The view leaves (true) or re-enters the scene.
+pub fn set_suspended(id: i32, suspended: bool) {
+    let (cb, ud) = with(|r| {
+        let v = &r.views[&id];
+        (v.callbacks.set_suspended, v.user_data)
+    });
+    if let Some(set_suspended) = cb {
+        unsafe { set_suspended(ud as *mut c_void, suspended as u8) };
     }
 }

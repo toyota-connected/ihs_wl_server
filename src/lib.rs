@@ -25,10 +25,12 @@ mod handlers;
 mod log;
 #[doc(hidden)]
 pub mod observe;
+mod pacing;
 mod params;
 mod state;
 mod submit;
 mod thread;
+mod timing;
 mod tree;
 mod view;
 

@@ -5,5 +5,6 @@ mod compositor;
 pub mod dmabuf;
 pub mod output;
 mod seat;
+mod timing;
 mod viewporter;
 mod xdg;

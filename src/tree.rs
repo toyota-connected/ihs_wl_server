@@ -36,12 +36,14 @@ pub struct LayerSpec {
     /// wl_output.transform values, which IhsTransform shares.
     pub transform: u32,
     pub opaque: bool,
+    /// The surface's content generation, to match presentation feedback.
+    pub generation: u64,
 }
 
 /// A surface's layer id, kept in its data map.
 struct LayerId(u32);
 
-fn layer_id(states: &compositor::SurfaceData) -> u32 {
+pub(crate) fn layer_id(states: &compositor::SurfaceData) -> u32 {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     states
         .data_map
@@ -136,6 +138,7 @@ pub fn build(root: &WlSurface) -> Built {
                 dst,
                 transform: transform_value(transform),
                 opaque,
+                generation: crate::timing::generation(states),
             });
         },
         |_, _, _| true,

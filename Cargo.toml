@@ -39,7 +39,7 @@ pkg-config = "0.3"
 
 [dev-dependencies]
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 
 [profile.release]
 debug = "line-tables-only"

@@ -18,7 +18,8 @@ any Flutter layer or puts it directly on a display plane.
 Early development. Working today:
 
 - A Wayland socket with `wl_compositor`, `wl_subcompositor`, `xdg_wm_base`,
-  `wl_shm`, `zwp_linux_dmabuf_v1`, `wp_viewporter`, `wl_seat`,
+  `wl_shm`, `zwp_linux_dmabuf_v1`, `wp_viewporter`, `wp_presentation`,
+  `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`, `wl_seat`,
   `wl_data_device_manager`, `wl_output` and `zxdg_output_manager_v1`.
 - A view binds to a toplevel by app_id and configures it to the view's size.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
@@ -30,6 +31,12 @@ Early development. Working today:
 - Buffers are released to the client when the shell's release fence signals.
   Without a fence, a buffer is released once a later frame is on screen.
   Frame callbacks fire when a frame is shown.
+- Frame timing follows the shell's reports of shown frames. Presentation
+  feedback carries the display's time, refresh, counter and flags (including
+  zero-copy). A fifo barrier clears once the update that set it is shown. A
+  commit with a target time is applied one refresh ahead of the first vblank
+  at or after it. For views off screen, a clock at the display's refresh
+  stands in for the reports.
 
 Not yet implemented:
 
@@ -37,7 +44,6 @@ Not yet implemented:
 - Binding a view to its toplevel by activation token.
 - `wl_shm` buffers as layers. The global is advertised, but shared-memory
   surfaces are skipped for now.
-- `wp_presentation`, `wp_fifo_v1` and `wp_commit_timing_v1`.
 - Explicit sync (`wp_linux_drm_syncobj_v1`).
 - dma-buf feedback and fractional scale.
 

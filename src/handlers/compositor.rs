@@ -30,19 +30,28 @@ impl CompositorHandler for State {
     fn new_surface(&mut self, surface: &WlSurface) {
         compositor::add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
             state.gate_on_readiness(surface);
+            state.watch_target(surface);
         });
     }
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        crate::timing::bump_generation(surface);
         if compositor::is_sync_subsurface(surface) {
             // Applied with its parent's commit, which submits the tree.
             return;
         }
         self.toplevel_commit(surface);
         self.popup_commit(surface);
-        if let Some(view_id) = self.bound_view_of(surface) {
-            self.submit_view(view_id);
+        match self.bound_view_of(surface) {
+            Some(view_id) => self.submit_view(view_id),
+            None => {
+                let mut root = surface.clone();
+                while let Some(parent) = compositor::get_parent(&root) {
+                    root = parent;
+                }
+                self.not_shown(&root);
+            }
         }
     }
 }

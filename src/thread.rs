@@ -36,11 +36,15 @@ pub enum Cmd {
         width: i32,
         height: i32,
     },
-    /// The shell showed the view's frame submitted as @seq (display thread).
+    /// The shell showed a frame of the view (display thread).
     Presented {
         view_id: i32,
-        seq: u64,
-        ust_ns: u64,
+        report: crate::timing::Report,
+    },
+    /// The view left (true) or re-entered the scene.
+    ViewSuspended {
+        view_id: i32,
+        suspended: bool,
     },
 }
 

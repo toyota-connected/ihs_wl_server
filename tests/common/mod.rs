@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod client;
+pub mod harness;
 pub mod mock_host;
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
