@@ -191,16 +191,21 @@ unsafe extern "C" fn on_presented(
     user_data: *mut c_void,
     seq: u64,
     ust_ns: u64,
-    _refresh_ns: u32,
-    _msc: u64,
-    _flags: u32,
+    refresh_ns: u32,
+    msc: u64,
+    flags: u32,
 ) {
     callback("presented", || {
         let view = shared(user_data);
         let _ = thread::send(Cmd::Presented {
             view_id: view.id,
-            seq,
-            ust_ns,
+            report: crate::timing::Report {
+                seq,
+                ust_ns,
+                refresh_ns,
+                msc,
+                flags,
+            },
         });
     });
 }
@@ -208,7 +213,11 @@ unsafe extern "C" fn on_presented(
 unsafe extern "C" fn on_set_suspended(user_data: *mut c_void, suspended: u8) {
     callback("set_suspended", || {
         let view = shared(user_data);
-        tracing::debug!(id = view.id, suspended, "set_suspended"); // will pause frame callbacks
+        tracing::debug!(id = view.id, suspended, "set_suspended");
+        let _ = thread::send(Cmd::ViewSuspended {
+            view_id: view.id,
+            suspended: suspended != 0,
+        });
     });
 }
 

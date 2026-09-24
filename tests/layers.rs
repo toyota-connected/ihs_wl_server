@@ -8,68 +8,9 @@
 mod common;
 
 use common::client::{Client, XRGB8888};
-use common::{mock_host, serial, Recorder};
+use common::harness::{params, Harness};
+use common::{mock_host, serial};
 use ihs_wl_server::observe::Observed;
-
-/// creationParams as the widget's StandardMessageCodec encodes
-/// `{'app_id': app_id}`.
-fn params(app_id: &str) -> Vec<u8> {
-    let mut b = vec![13u8, 1]; // map, 1 entry
-    for s in ["app_id", app_id] {
-        b.push(7); // string
-        b.push(s.len() as u8);
-        b.extend_from_slice(s.as_bytes());
-    }
-    b
-}
-
-struct Harness {
-    rec: Recorder,
-    client: Client,
-}
-
-impl Harness {
-    fn new(socket: &str) -> Self {
-        mock_host::install();
-        let rec = Recorder::install();
-        ihs_wl_server::start(ihs_wl_server::Config {
-            socket_name: Some(socket.into()),
-        })
-        .unwrap();
-        let client = Client::connect(socket);
-        Harness { rec, client }
-    }
-
-    /// The submissions for @p view since @p after (a count of submissions).
-    fn submissions(view: i32) -> Vec<mock_host::Submission> {
-        mock_host::submissions()
-            .into_iter()
-            .filter(|s| s.view_id == view)
-            .collect()
-    }
-
-    fn wait_submissions(&self, view: i32, n: usize) -> Vec<mock_host::Submission> {
-        self.rec
-            .wait_for("submission", |_| Self::submissions(view).len() >= n);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let s = Self::submissions(view);
-            if s.len() >= n {
-                return s;
-            }
-            assert!(std::time::Instant::now() < deadline, "no submission {n}");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-    }
-}
-
-impl Drop for Harness {
-    fn drop(&mut self) {
-        ihs_wl_server::stop().unwrap();
-        mock_host::uninstall();
-        common::clear_observer();
-    }
-}
 
 #[test]
 fn a_toplevel_reaches_its_view_as_a_layer() {

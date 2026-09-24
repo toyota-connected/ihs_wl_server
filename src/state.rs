@@ -10,13 +10,16 @@ use std::sync::Arc;
 
 use smithay::input::{Seat, SeatState};
 use smithay::output::Output;
-use smithay::reexports::calloop::{LoopHandle, LoopSignal};
+use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::DisplayHandle;
+use smithay::reexports::wayland_server::{DisplayHandle, Weak};
+use smithay::wayland::commit_timing::CommitTimingManagerState;
 use smithay::wayland::compositor::{self, CompositorClientState, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::fifo::FifoManagerState;
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::xdg::{ToplevelSurface, XdgShellState, XdgToplevelSurfaceData};
 use smithay::wayland::shm::ShmState;
@@ -25,8 +28,10 @@ use smithay::wayland::viewporter::ViewporterState;
 use crate::buffers::BufferIds;
 use crate::caps::FormatModifier;
 use crate::observe::{self, Observed};
+use crate::pacing::Loose;
 use crate::submit::Holds;
 use crate::thread::Cmd;
+use crate::timing::{FrameClock, Frames};
 use crate::view::ViewHandle;
 
 pub struct State {
@@ -43,6 +48,12 @@ pub struct State {
     pub dmabuf_global: DmabufGlobal,
     #[allow(dead_code)]
     pub viewporter_state: ViewporterState,
+    #[allow(dead_code)]
+    pub presentation_state: PresentationState,
+    #[allow(dead_code)]
+    pub fifo_manager_state: FifoManagerState,
+    #[allow(dead_code)]
+    pub commit_timing_manager_state: CommitTimingManagerState,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
     /// Input attaches its pointer/touch/keyboard capabilities here.
@@ -60,6 +71,15 @@ pub struct State {
     pub views: HashMap<i32, ViewEntry>,
     pub buffers: BufferIds,
     clients: Arc<AtomicU32>,
+
+    /// The display's refresh cycle, from the shell's last report.
+    pub clock: FrameClock,
+    /// Surfaces with updates waiting for their target time.
+    pub timed: Vec<Weak<WlSurface>>,
+    /// Fifo barriers of updates no view shows.
+    pub loose: Vec<Loose>,
+    /// The clock's next tick, while anything waits on it.
+    pub tick: Option<(RegistrationToken, u64)>,
 }
 
 /// A live platform view and what it shows.
@@ -73,6 +93,10 @@ pub struct ViewEntry {
     pub seq: u64,
     /// Buffers the shell may still be using.
     pub holds: Holds,
+    /// Submitted frames awaiting the shell's report.
+    pub frames: Frames,
+    /// Out of the scene: nothing it shows is reported.
+    pub suspended: bool,
 }
 
 impl State {
@@ -94,6 +118,10 @@ impl State {
             dmabuf_state,
             dmabuf_global,
             viewporter_state: ViewporterState::new::<Self>(&dh),
+            // The shell reports CLOCK_MONOTONIC times.
+            presentation_state: PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32),
+            fifo_manager_state: FifoManagerState::new::<Self>(&dh),
+            commit_timing_manager_state: CommitTimingManagerState::new::<Self>(&dh),
             data_device_state: DataDeviceState::new::<Self>(&dh),
             seat_state,
             seat,
@@ -106,6 +134,10 @@ impl State {
             views: HashMap::new(),
             buffers: BufferIds::default(),
             clients: Arc::new(AtomicU32::new(0)),
+            clock: FrameClock::default(),
+            timed: Vec::new(),
+            loose: Vec::new(),
+            tick: None,
         }
     }
 
@@ -138,6 +170,8 @@ impl State {
                         size: None,
                         seq: 0,
                         holds: Holds::default(),
+                        frames: Frames::default(),
+                        suspended: false,
                     },
                 );
                 self.try_bind_view(id);
@@ -157,11 +191,8 @@ impl State {
                 }
                 self.configure_view(view_id);
             }
-            Cmd::Presented {
-                view_id,
-                seq,
-                ust_ns,
-            } => self.presented(view_id, seq, ust_ns),
+            Cmd::Presented { view_id, report } => self.frame_presented(view_id, report),
+            Cmd::ViewSuspended { view_id, suspended } => self.view_suspended(view_id, suspended),
         }
     }
 
@@ -224,6 +255,7 @@ impl State {
 
     /// Break the view's binding, handing back every buffer it held.
     pub fn unbind_view(&mut self, view_id: i32) {
+        self.drop_frames(view_id);
         let Some(entry) = self.views.get_mut(&view_id) else {
             return;
         };
@@ -281,19 +313,6 @@ impl State {
         }
         let id = Toplevels::id_of(&root)?;
         self.toplevels.by_id.get(&id)?.view
-    }
-
-    /// A frame of the view reached the screen: buffers it replaced are free,
-    /// and the clients may draw the next one.
-    fn presented(&mut self, view_id: i32, seq: u64, ust_ns: u64) {
-        let Some(entry) = self.views.get_mut(&view_id) else {
-            return;
-        };
-        entry.holds.presented(seq);
-        let Some(t) = entry.toplevel.and_then(|id| self.toplevels.by_id.get(&id)) else {
-            return;
-        };
-        crate::submit::send_frame_callbacks(t.surface.wl_surface(), ust_ns);
     }
 }
 
