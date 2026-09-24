@@ -19,15 +19,19 @@ Early development. Working today:
 
 - A Wayland socket with `wl_compositor`, `wl_subcompositor`, `xdg_wm_base`,
   `wl_shm`, `zwp_linux_dmabuf_v1`, `wp_viewporter`, `wp_presentation`,
-  `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`, `wl_seat`,
-  `wl_data_device_manager`, `wl_output` and `zxdg_output_manager_v1`.
+  `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`,
+  `wp_linux_drm_syncobj_manager_v1` (when a render node supports it),
+  `wl_seat`, `wl_data_device_manager`, `wl_output` and
+  `zxdg_output_manager_v1`.
 - A view binds to a toplevel by app_id and configures it to the view's size.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
   buffer transforms and opaque regions) reaches the shell as one layer per
   dma-buf surface, bottom to top. Each layer keeps a stable id, so it keeps
   its display plane while the tree changes.
 - Commits are held until their dma-bufs are ready, so the shell never needs
-  an acquire fence.
+  an acquire fence. With explicit sync the commit's acquire point decides;
+  otherwise the buffer's implicit fence does. A buffer's release point is
+  signaled when it is released.
 - Buffers are released to the client when the shell's release fence signals.
   Without a fence, a buffer is released once a later frame is on screen.
   Frame callbacks fire when a frame is shown.
@@ -44,7 +48,6 @@ Not yet implemented:
 - Binding a view to its toplevel by activation token.
 - `wl_shm` buffers as layers. The global is advertised, but shared-memory
   surfaces are skipped for now.
-- Explicit sync (`wp_linux_drm_syncobj_v1`).
 - dma-buf feedback and fractional scale.
 
 The C entry points for input and activation tokens exist. For now they return
@@ -124,6 +127,15 @@ WAYLAND_DISPLAY=wayland-test foot
 
 Clients connect and map, but nothing is shown, because there is no shell to
 host the views.
+
+## Explicit sync
+
+Explicit sync is offered when a render node can wait on timeline syncobjs
+through eventfds (Linux 6.6 or newer). A syncobj file is not tied to one
+device, so the server uses the first `/dev/dri/renderD*` that can, whichever
+GPU clients render on. `IHS_WL_SYNCOBJ_DEVICE` names a render node to use
+instead. Without one, the global is not advertised and clients use implicit
+sync.
 
 ## Logging
 

@@ -26,6 +26,10 @@ use wayland_protocols::wp::fifo::v1::client::{wp_fifo_manager_v1, wp_fifo_v1};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1,
 };
+use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
+    wp_linux_drm_syncobj_manager_v1, wp_linux_drm_syncobj_surface_v1,
+    wp_linux_drm_syncobj_timeline_v1,
+};
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
@@ -47,6 +51,7 @@ struct App {
     presentation_clock: Option<u32>,
     fifo_manager: Option<wp_fifo_manager_v1::WpFifoManagerV1>,
     timing_manager: Option<wp_commit_timing_manager_v1::WpCommitTimingManagerV1>,
+    syncobj_manager: Option<wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1>,
     /// Presentation feedback outcomes, by the tag they were asked with.
     feedback: HashMap<usize, Feedback>,
 }
@@ -78,6 +83,8 @@ pub struct Client {
     fifo: Option<wp_fifo_v1::WpFifoV1>,
     timer: Option<wp_commit_timer_v1::WpCommitTimerV1>,
     next_feedback: usize,
+    timeline: Option<wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1>,
+    syncobj_surface: Option<wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1>,
 }
 
 impl Client {
@@ -101,6 +108,8 @@ impl Client {
             fifo: None,
             timer: None,
             next_feedback: 0,
+            timeline: None,
+            syncobj_surface: None,
         }
     }
 
@@ -351,6 +360,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.presentation = Some(registry.bind(name, version.min(2), qh, ()))
                 }
                 "wp_fifo_manager_v1" => app.fifo_manager = Some(registry.bind(name, 1, qh, ())),
+                "wp_linux_drm_syncobj_manager_v1" => {
+                    app.syncobj_manager = Some(registry.bind(name, 1, qh, ()))
+                }
                 "wp_commit_timing_manager_v1" => {
                     app.timing_manager = Some(registry.bind(name, 1, qh, ()))
                 }
@@ -530,6 +542,31 @@ impl Client {
         );
     }
 
+    pub fn has_syncobj(&self) -> bool {
+        self.app.syncobj_manager.is_some()
+    }
+
+    /// Use explicit sync on the toplevel, over the timeline @p fd.
+    pub fn use_explicit_sync(&mut self, fd: std::os::fd::OwnedFd) {
+        let qh = self.queue.handle();
+        let manager = self
+            .app
+            .syncobj_manager
+            .as_ref()
+            .expect("no syncobj manager");
+        self.timeline = Some(manager.import_timeline(fd.as_fd(), &qh, ()));
+        self.syncobj_surface = Some(manager.get_surface(self._surface.as_ref().unwrap(), &qh, ()));
+    }
+
+    /// The next commit of the toplevel is ready at @p acquire, and its
+    /// buffer free again at @p release.
+    pub fn set_sync_points(&mut self, acquire: u64, release: u64) {
+        let timeline = self.timeline.as_ref().unwrap();
+        let surface = self.syncobj_surface.as_ref().unwrap();
+        surface.set_acquire_point(timeline, (acquire >> 32) as u32, acquire as u32);
+        surface.set_release_point(timeline, (release >> 32) as u32, release as u32);
+    }
+
     /// True once the server has gone away.
     pub fn roundtrip_fails(&mut self) -> bool {
         self.queue.roundtrip(&mut self.app).is_err()
@@ -590,3 +627,7 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, usize> for App {
         app.feedback.insert(*tag, outcome);
     }
 }
+
+delegate_noop!(App: ignore wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1);
+delegate_noop!(App: ignore wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1);
+delegate_noop!(App: ignore wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1);

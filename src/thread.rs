@@ -246,6 +246,7 @@ fn run(
 
     event_loop
         .run(None, &mut state, |state| {
+            state.reap_clients();
             if let Err(e) = state.dh.flush_clients() {
                 tracing::warn!("flush_clients: {e}");
             }

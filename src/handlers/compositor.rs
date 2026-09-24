@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+use smithay::backend::renderer::sync::Fence;
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
-use smithay::reexports::calloop::Interest;
+use smithay::reexports::calloop::{EventSource, Interest};
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_surface::WlSurface};
 use smithay::reexports::wayland_server::{Client, Resource};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    self, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
+    self, Blocker, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
     SurfaceAttributes,
 };
 use smithay::wayland::dmabuf::get_dmabuf;
+use smithay::wayland::drm_syncobj::DrmSyncobjCachedState;
 use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{delegate_compositor, delegate_shm};
@@ -56,30 +58,84 @@ impl CompositorHandler for State {
     }
 }
 
+/// Commits of one client waiting for their buffers at once, at most.
+const MAX_WAITS: usize = 32;
+
 impl State {
     /// Hold a commit that attaches a dma-buf until the client's rendering
     /// into it is done, so the shell is only ever handed finished buffers and
-    /// needs no acquire fence. The buffer's implicit fence decides: its fds
-    /// poll readable once every write to it has completed.
+    /// needs no acquire fence. With explicit sync the commit's acquire point
+    /// decides; otherwise the buffer's implicit fence does: its fds poll
+    /// readable once every write to it has completed.
     fn gate_on_readiness(&mut self, surface: &WlSurface) {
-        let dmabuf = compositor::with_states(surface, |states| {
+        let (dmabuf, acquire) = compositor::with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-            match attrs.pending().buffer.as_ref() {
+            let dmabuf = match attrs.pending().buffer.as_ref() {
                 Some(BufferAssignment::NewBuffer(buffer)) => get_dmabuf(buffer).ok().cloned(),
                 _ => None,
-            }
+            };
+            let mut sync = states.cached_state.get::<DrmSyncobjCachedState>();
+            (dmabuf, sync.pending().acquire_point.clone())
         });
+        // An acquire point without a dma-buf is a protocol error, which the
+        // syncobj surface's own hook posts.
         let Some(dmabuf) = dmabuf else {
-            return;
-        };
-        // Already done: nothing to wait for.
-        let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else {
             return;
         };
         let Some(client) = surface.client() else {
             return;
         };
+        match acquire {
+            // Explicit sync replaces implicit: the buffer may carry no
+            // implicit fence at all.
+            Some(acquire) => {
+                if acquire.is_signaled() {
+                    return;
+                }
+                match acquire.generate_blocker() {
+                    Ok((blocker, source)) => self.hold_commit(surface, client, blocker, source),
+                    // Cannot wait for it: let the commit through rather than
+                    // wedge the client.
+                    Err(e) => tracing::warn!("acquire point eventfd: {e}"),
+                }
+            }
+            None => {
+                // Already done: nothing to wait for.
+                if let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) {
+                    self.hold_commit(surface, client, blocker, source);
+                }
+            }
+        }
+    }
+
+    /// Hold @p surface's commit on @p blocker until @p source fires.
+    ///
+    /// Each wait holds an fd in the shell's process until it fires, and an
+    /// explicit-sync point may never be signaled. So a client gets at most
+    /// MAX_WAITS at a time -- a commit past that still queues behind the
+    /// earlier ones, only without a wait of its own -- and loses them when it
+    /// disconnects.
+    fn hold_commit<S>(
+        &mut self,
+        surface: &WlSurface,
+        client: Client,
+        blocker: impl Blocker + Send + 'static,
+        source: S,
+    ) where
+        S: EventSource<Event = (), Ret = std::io::Result<()>> + 'static,
+    {
+        let id = client.id();
+        let waits = self.waits.entry(id.clone()).or_default();
+        if waits.len() >= MAX_WAITS {
+            tracing::debug!(?id, "too many commits waiting; not waiting on another");
+            return;
+        }
+        self.next_wait += 1;
+        let key = self.next_wait;
         let inserted = self.loop_handle.insert_source(source, move |_, _, state| {
+            if let Some(waits) = state.waits.get_mut(&client.id()) {
+                waits.remove(&key);
+            }
             let dh = state.dh.clone();
             state
                 .client_compositor_state(&client)
@@ -87,7 +143,10 @@ impl State {
             Ok(())
         });
         match inserted {
-            Ok(_) => compositor::add_blocker(surface, blocker),
+            Ok(token) => {
+                self.waits.entry(id).or_default().insert(key, token);
+                compositor::add_blocker(surface, blocker);
+            }
             // Without a source nothing would ever clear the blocker; let the
             // commit through rather than wedge the client.
             Err(e) => tracing::warn!("readiness source: {e}"),

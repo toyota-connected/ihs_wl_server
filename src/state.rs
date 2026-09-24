@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use smithay::input::{Seat, SeatState};
 use smithay::output::Output;
@@ -17,6 +17,7 @@ use smithay::reexports::wayland_server::{DisplayHandle, Weak};
 use smithay::wayland::commit_timing::CommitTimingManagerState;
 use smithay::wayland::compositor::{self, CompositorClientState, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::drm_syncobj::DrmSyncobjState;
 use smithay::wayland::fifo::FifoManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
@@ -54,6 +55,8 @@ pub struct State {
     pub fifo_manager_state: FifoManagerState,
     #[allow(dead_code)]
     pub commit_timing_manager_state: CommitTimingManagerState,
+    /// Explicit sync, when a render node can wait on syncobjs.
+    pub syncobj_state: Option<DrmSyncobjState>,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
     /// Input attaches its pointer/touch/keyboard capabilities here.
@@ -80,6 +83,13 @@ pub struct State {
     pub loose: Vec<Loose>,
     /// The clock's next tick, while anything waits on it.
     pub tick: Option<(RegistrationToken, u64)>,
+
+    /// Commits waiting for their buffers to be ready: the event sources
+    /// that release them, by client.
+    pub waits: HashMap<ClientId, HashMap<u64, RegistrationToken>>,
+    pub next_wait: u64,
+    /// Clients disconnected since the last look, as their data records it.
+    gone: Arc<Mutex<Vec<ClientId>>>,
 }
 
 /// A live platform view and what it shows.
@@ -122,6 +132,8 @@ impl State {
             presentation_state: PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32),
             fifo_manager_state: FifoManagerState::new::<Self>(&dh),
             commit_timing_manager_state: CommitTimingManagerState::new::<Self>(&dh),
+            syncobj_state: crate::syncobj::device()
+                .map(|device| DrmSyncobjState::new::<Self>(&dh, device)),
             data_device_state: DataDeviceState::new::<Self>(&dh),
             seat_state,
             seat,
@@ -138,6 +150,9 @@ impl State {
             timed: Vec::new(),
             loose: Vec::new(),
             tick: None,
+            waits: HashMap::new(),
+            next_wait: 0,
+            gone: Arc::default(),
         }
     }
 
@@ -145,9 +160,27 @@ impl State {
         let data = Arc::new(ClientState {
             compositor_state: CompositorClientState::default(),
             clients: self.clients.clone(),
+            gone: self.gone.clone(),
         });
         if let Err(e) = self.dh.insert_client(stream, data) {
             tracing::warn!("insert_client: {e}");
+        }
+    }
+
+    /// Drop what disconnected clients left waiting: nothing will apply
+    /// their commits now, and a wait on a point that is never signaled
+    /// would hold its fd for good.
+    pub fn reap_clients(&mut self) {
+        let gone = std::mem::take(&mut *self.gone.lock().unwrap_or_else(|e| e.into_inner()));
+        for id in gone {
+            let waits = self.waits.remove(&id).unwrap_or_default();
+            if waits.is_empty() {
+                continue;
+            }
+            observe::emit(Observed::WaitsDropped { count: waits.len() });
+            for (_, token) in waits {
+                self.loop_handle.remove(token);
+            }
         }
     }
 
@@ -320,6 +353,7 @@ impl State {
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
     clients: Arc<AtomicU32>,
+    gone: Arc<Mutex<Vec<ClientId>>>,
 }
 
 impl ClientData for ClientState {
@@ -328,7 +362,11 @@ impl ClientData for ClientState {
         observe::emit(Observed::ClientCount(n));
     }
 
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {
+    fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
+        self.gone
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(client_id);
         let n = self.clients.fetch_sub(1, Ordering::Relaxed) - 1;
         observe::emit(Observed::ClientCount(n));
     }
