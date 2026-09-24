@@ -27,6 +27,18 @@ pub enum Cmd {
     ViewCreated(crate::view::ViewHandle),
     /// A view's dispose callback ran; its link is already cleared.
     ViewDisposed(i32),
+    /// The view was laid out at this size, in physical pixels.
+    ViewResized {
+        view_id: i32,
+        width: i32,
+        height: i32,
+    },
+    /// The shell showed the view's frame submitted as @seq (display thread).
+    Presented {
+        view_id: i32,
+        seq: u64,
+        ust_ns: u64,
+    },
 }
 
 struct Running {
@@ -69,10 +81,14 @@ pub fn start(config: Config) -> Result<()> {
         let _ = dead.thread.join();
     }
 
+    // A capability query is platform-thread only, and this is the thread the
+    // embedder starts the server from; the compositor thread gets the answer.
+    let formats = crate::caps::import_formats();
+
     let (ready_tx, ready_rx) = mpsc::channel();
     let thread = thread::Builder::new()
         .name("ihs-wl".into())
-        .spawn(move || compositor_main(config, ready_tx))
+        .spawn(move || compositor_main(config, formats, ready_tx))
         .map_err(|e| Error::internal(format!("spawn compositor thread: {e}")))?;
 
     match ready_rx.recv() {
@@ -157,9 +173,9 @@ pub fn socket_name() -> Option<String> {
         .map(|r| r.socket_name.to_string_lossy().into_owned())
 }
 
-fn compositor_main(config: Config, ready: Ready) {
+fn compositor_main(config: Config, formats: Vec<crate::caps::FormatModifier>, ready: Ready) {
     let mut ready = Some(ready);
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| run(&config, &mut ready)));
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| run(&config, &formats, &mut ready)));
     // By here the loop and the Display are dropped, so clients have already
     // seen the disconnect.
     let error = match outcome {
@@ -178,7 +194,11 @@ fn compositor_main(config: Config, ready: Ready) {
     }
 }
 
-fn run(config: &Config, ready: &mut Option<Ready>) -> Result<()> {
+fn run(
+    config: &Config,
+    formats: &[crate::caps::FormatModifier],
+    ready: &mut Option<Ready>,
+) -> Result<()> {
     let mut event_loop: EventLoop<'static, State> =
         EventLoop::try_new().map_err(|e| Error::internal(format!("calloop: {e}")))?;
     let display: Display<State> =
@@ -211,7 +231,7 @@ fn run(config: &Config, ready: &mut Option<Ready>) -> Result<()> {
         })
         .map_err(|e| Error::internal(format!("insert command channel: {}", e.error)))?;
 
-    let mut state = State::new(dh, event_loop.get_signal());
+    let mut state = State::new(dh, event_loop.get_signal(), handle.clone(), formats);
 
     if let Some(ready) = ready.take() {
         let _ = ready.send(Ok((tx, socket_name)));

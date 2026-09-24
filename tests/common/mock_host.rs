@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::Mutex;
 
 use ihs_wl_server::ffi::ihs::sys;
@@ -47,6 +48,26 @@ pub struct IhsPvHost {
         ) -> c_int,
     >,
     assets_path: Option<unsafe extern "C" fn(*mut c_void) -> *const c_char>,
+    post_platform_task: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            Option<unsafe extern "C" fn(*mut c_void)>,
+            *mut c_void,
+        ) -> c_int,
+    >,
+    is_platform_thread: Option<unsafe extern "C" fn(*mut c_void) -> c_int>,
+    retire_buffer:
+        Option<unsafe extern "C" fn(*mut c_void, *mut sys::IhsPlatformView, u32) -> c_int>,
+    submit_layers: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut sys::IhsPlatformView,
+            *const sys::IhsLayer,
+            usize,
+            u64,
+            *mut c_int,
+        ) -> c_int,
+    >,
 }
 
 unsafe impl Sync for IhsPvHost {}
@@ -65,11 +86,41 @@ struct LiveView {
     user_data: usize,
 }
 
+/// One layer of a submission, as the registry received it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubmittedLayer {
+    pub layer_id: u32,
+    pub buffer_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fourcc: u32,
+    pub plane_count: u32,
+    /// 16.16
+    pub src: (i32, i32, u32, u32),
+    pub dst: (i32, i32, u32, u32),
+    pub transform: u32,
+    pub opaque: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Submission {
+    pub view_id: i32,
+    pub seq: u64,
+    pub layers: Vec<SubmittedLayer>,
+}
+
 #[derive(Default)]
 struct Registry {
     factories: HashMap<String, Factory>,
     views: HashMap<i32, LiveView>,
     grants: u32,
+    submissions: Vec<Submission>,
+    retired: Vec<(i32, u32)>,
+    /// Hand back an eventfd per layer as its release fence, as the EGL
+    /// backends do; otherwise none, as the Vulkan ones do.
+    fenced: bool,
+    /// Our side of the eventfds handed out: (buffer_id, fd).
+    fences: Vec<(u32, OwnedFd)>,
 }
 
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
@@ -129,6 +180,85 @@ unsafe extern "C" fn grant(
     0
 }
 
+fn view_id_of(view: *mut sys::IhsPlatformView) -> i32 {
+    (view as usize - 0x1000) as i32
+}
+
+/// Close every plane fd of @p frame once, as the registry does.
+unsafe fn consume_frame(frame: &sys::IhsFrame) {
+    let n = (frame.plane_count as usize).min(4);
+    for i in 0..n {
+        let fd = frame.plane_fd[i];
+        if fd >= 0 && !frame.plane_fd[..i].contains(&fd) {
+            drop(OwnedFd::from_raw_fd(fd));
+        }
+    }
+}
+
+unsafe extern "C" fn submit_layers(
+    _ud: *mut c_void,
+    view: *mut sys::IhsPlatformView,
+    layers: *const sys::IhsLayer,
+    count: usize,
+    seq: u64,
+    out_fences: *mut c_int,
+) -> c_int {
+    let layers = std::slice::from_raw_parts(layers, count);
+    let mut recorded = Vec::new();
+    for (i, l) in layers.iter().enumerate() {
+        let f = &*l.frame;
+        recorded.push(SubmittedLayer {
+            layer_id: l.layer_id,
+            buffer_id: f.buffer_id,
+            width: f.width,
+            height: f.height,
+            fourcc: f.format.fourcc,
+            plane_count: f.plane_count,
+            src: (l.src_x, l.src_y, l.src_w, l.src_h),
+            dst: (l.dst_x, l.dst_y, l.dst_w, l.dst_h),
+            transform: l.transform,
+            opaque: l.opaque != 0,
+        });
+        consume_frame(f);
+        if l.acquire_fence_fd >= 0 {
+            drop(OwnedFd::from_raw_fd(l.acquire_fence_fd));
+        }
+        let out = if out_fences.is_null() {
+            None
+        } else {
+            Some(&mut *out_fences.add(i))
+        };
+        if let Some(out) = out {
+            *out = -1;
+            let fenced = with(|r| r.fenced);
+            if fenced {
+                let efd = libc::eventfd(0, libc::EFD_CLOEXEC);
+                assert!(efd >= 0);
+                let ours = OwnedFd::from_raw_fd(efd);
+                *out = libc::dup(ours.as_raw_fd());
+                with(|r| r.fences.push((f.buffer_id, ours)));
+            }
+        }
+    }
+    with(|r| {
+        r.submissions.push(Submission {
+            view_id: view_id_of(view),
+            seq,
+            layers: recorded,
+        })
+    });
+    0
+}
+
+unsafe extern "C" fn retire_buffer(
+    _ud: *mut c_void,
+    view: *mut sys::IhsPlatformView,
+    buffer_id: u32,
+) -> c_int {
+    with(|r| r.retired.push((view_id_of(view), buffer_id)));
+    0
+}
+
 static HOST: IhsPvHost = IhsPvHost {
     struct_size: std::mem::size_of::<IhsPvHost>(),
     user_data: std::ptr::null_mut(),
@@ -143,6 +273,10 @@ static HOST: IhsPvHost = IhsPvHost {
     grant_shm_fd: None,
     submit: None,
     assets_path: None,
+    post_platform_task: None,
+    is_platform_thread: None,
+    retire_buffer: Some(retire_buffer),
+    submit_layers: Some(submit_layers),
 };
 
 pub fn install() {
@@ -169,6 +303,17 @@ fn fake_view(id: i32) -> *mut sys::IhsPlatformView {
 
 /// What the registry does on a Flutter `create`: invoke the factory.
 pub fn create_view(view_type: &str, id: i32, width: f64, height: f64) -> c_int {
+    create_view_with_params(view_type, id, width, height, &[])
+}
+
+/// The same, with the widget's encoded creationParams.
+pub fn create_view_with_params(
+    view_type: &str,
+    id: i32,
+    width: f64,
+    height: f64,
+    params: &[u8],
+) -> c_int {
     let (factory, fud) = with(|r| {
         let f = r
             .factories
@@ -183,6 +328,12 @@ pub fn create_view(view_type: &str, id: i32, width: f64, height: f64) -> c_int {
         view_type: ty.as_ptr(),
         width,
         height,
+        params: if params.is_empty() {
+            std::ptr::null()
+        } else {
+            params.as_ptr()
+        },
+        params_size: params.len(),
         ..Default::default()
     };
     let mut callbacks = sys::IhsPvCallbacks::default();
@@ -226,5 +377,55 @@ pub fn dispose_view(id: i32) {
     let view = with(|r| r.views.remove(&id)).expect("no such view");
     if let Some(dispose) = view.callbacks.dispose {
         unsafe { dispose(view.user_data as *mut c_void) };
+    }
+}
+
+/// Hand back an eventfd per layer as its release fence from now on.
+pub fn set_fenced(fenced: bool) {
+    with(|r| r.fenced = fenced);
+}
+
+/// Every submission so far.
+pub fn submissions() -> Vec<Submission> {
+    with(|r| r.submissions.clone())
+}
+
+/// Every (view, buffer_id) retired so far.
+pub fn retired() -> Vec<(i32, u32)> {
+    with(|r| r.retired.clone())
+}
+
+/// Signal the release fences handed out for @p buffer_id, as the shell does
+/// once it is done with the buffer.
+pub fn signal_release(buffer_id: u32) {
+    let fences: Vec<OwnedFd> = with(|r| {
+        let (hit, keep): (Vec<_>, Vec<_>) =
+            r.fences.drain(..).partition(|(id, _)| *id == buffer_id);
+        r.fences = keep;
+        hit.into_iter().map(|(_, fd)| fd).collect()
+    });
+    for fd in fences {
+        let one: u64 = 1;
+        unsafe { libc::write(fd.as_raw_fd(), (&one as *const u64).cast(), 8) };
+    }
+}
+
+/// What the display does once a frame of the view is on screen.
+pub fn present(id: i32, seq: u64) {
+    let (cb, ud) = with(|r| {
+        let v = &r.views[&id];
+        (v.callbacks.presented, v.user_data)
+    });
+    if let Some(presented) = cb {
+        unsafe {
+            presented(
+                ud as *mut c_void,
+                seq,
+                1_000_000_000 * seq,
+                16_666_667,
+                seq,
+                0,
+            )
+        };
     }
 }

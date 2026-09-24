@@ -1,25 +1,44 @@
-//! A minimal xdg-shell + wl_shm client, the in-tree equivalent of
-//! weston-simple-shm: map one toplevel with one ARGB buffer.
+//! A minimal xdg-shell client: the in-tree equivalent of weston-simple-shm
+//! (one toplevel, one ARGB shm buffer) and of weston-simple-dmabuf (a
+//! toplevel, optionally with a subsurface, over linux-dmabuf buffers).
+//!
+//! Its "dma-bufs" are memfds. The server never touches a buffer's pixels --
+//! it only dups the fds and hands them to the shell -- so any fd serves.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use wayland_client::protocol::{
-    wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_region, wl_registry, wl_shm, wl_shm_pool,
+    wl_subcompositor, wl_subsurface, wl_surface,
 };
 use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{
+    zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1,
+};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 #[derive(Default)]
 struct App {
     compositor: Option<wl_compositor::WlCompositor>,
+    subcompositor: Option<wl_subcompositor::WlSubcompositor>,
     shm: Option<wl_shm::WlShm>,
+    dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     globals: Vec<String>,
     configured: bool,
+    /// The size of the toplevel's last configure.
+    configure_size: Option<(i32, i32)>,
+    /// wl_buffer.release events, by the client's buffer index.
+    released: HashMap<usize, u32>,
+    frames_done: u32,
 }
+
+/// DRM_FORMAT_XRGB8888.
+pub const XRGB8888: u32 = 0x3432_5258;
 
 pub struct Client {
     conn: Connection,
@@ -27,6 +46,9 @@ pub struct Client {
     app: App,
     _surface: Option<wl_surface::WlSurface>,
     _toplevel: Option<xdg_toplevel::XdgToplevel>,
+    /// dma-buf buffers, by index, and the memfds behind them.
+    buffers: Vec<Option<(wl_buffer::WlBuffer, File)>>,
+    sub_surface: Option<(wl_surface::WlSurface, wl_subsurface::WlSubsurface)>,
 }
 
 impl Client {
@@ -45,6 +67,8 @@ impl Client {
             app,
             _surface: None,
             _toplevel: None,
+            buffers: Vec::new(),
+            sub_surface: None,
         }
     }
 
@@ -98,6 +122,147 @@ impl Client {
         self.queue.roundtrip(&mut self.app).unwrap();
     }
 
+    /// Create and configure a toplevel with no buffer yet.
+    pub fn create_toplevel(&mut self, app_id: &str, title: &str) {
+        let qh = self.queue.handle();
+        let surface = self
+            .app
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let xdg = self
+            .app
+            .wm_base
+            .as_ref()
+            .unwrap()
+            .get_xdg_surface(&surface, &qh, ());
+        let toplevel = xdg.get_toplevel(&qh, ());
+        toplevel.set_app_id(app_id.into());
+        toplevel.set_title(title.into());
+        surface.commit();
+        while !self.app.configured {
+            self.queue.blocking_dispatch(&mut self.app).unwrap();
+        }
+        self._surface = Some(surface);
+        self._toplevel = Some(toplevel);
+    }
+
+    /// A linux-dmabuf buffer of @p width x @p height XRGB8888 over a memfd.
+    /// Returns its index.
+    pub fn new_dmabuf(&mut self, width: i32, height: i32) -> usize {
+        let qh = self.queue.handle();
+        let stride = width * 4;
+        let file = memfd((stride * height) as usize);
+        let params = self
+            .app
+            .dmabuf
+            .as_ref()
+            .expect("no linux-dmabuf")
+            .create_params(&qh, ());
+        params.add(file.as_fd(), 0, 0, stride as u32, 0, 0);
+        let index = self.buffers.len();
+        let buffer = params.create_immed(
+            width,
+            height,
+            XRGB8888,
+            zwp_linux_buffer_params_v1::Flags::empty(),
+            &qh,
+            index,
+        );
+        params.destroy();
+        self.buffers.push(Some((buffer, file)));
+        index
+    }
+
+    /// Attach buffer @p index to the toplevel (whole, at 0,0), optionally
+    /// asking for a frame callback, and commit.
+    pub fn commit_buffer(&mut self, index: usize, frame: bool) {
+        let qh = self.queue.handle();
+        let surface = self._surface.as_ref().unwrap();
+        let (buffer, _) = self.buffers[index].as_ref().unwrap();
+        surface.attach(Some(buffer), 0, 0);
+        surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        if frame {
+            surface.frame(&qh, ());
+        }
+        surface.commit();
+        self.roundtrip();
+    }
+
+    /// Mark the whole toplevel surface opaque at its next commit.
+    pub fn set_opaque(&mut self, width: i32, height: i32) {
+        let qh = self.queue.handle();
+        let region = self.app.compositor.as_ref().unwrap().create_region(&qh, ());
+        region.add(0, 0, width, height);
+        self._surface
+            .as_ref()
+            .unwrap()
+            .set_opaque_region(Some(&region));
+        region.destroy();
+    }
+
+    /// A desynchronized subsurface at (@p x, @p y) showing buffer @p index.
+    pub fn add_subsurface(&mut self, index: usize, x: i32, y: i32) {
+        let qh = self.queue.handle();
+        let parent = self._surface.as_ref().unwrap();
+        let surface = self
+            .app
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let sub =
+            self.app
+                .subcompositor
+                .as_ref()
+                .unwrap()
+                .get_subsurface(&surface, parent, &qh, ());
+        sub.set_position(x, y);
+        sub.set_desync();
+        let (buffer, _) = self.buffers[index].as_ref().unwrap();
+        surface.attach(Some(buffer), 0, 0);
+        surface.commit();
+        // The position applies with the parent's next commit.
+        parent.commit();
+        self.roundtrip();
+        self.sub_surface = Some((surface, sub));
+    }
+
+    /// Destroy buffer @p index.
+    pub fn destroy_buffer(&mut self, index: usize) {
+        if let Some((buffer, _)) = self.buffers[index].take() {
+            buffer.destroy();
+        }
+        self.roundtrip();
+    }
+
+    /// wl_buffer.release events buffer @p index has had.
+    pub fn released(&self, index: usize) -> u32 {
+        self.app.released.get(&index).copied().unwrap_or(0)
+    }
+
+    pub fn frames_done(&self) -> u32 {
+        self.app.frames_done
+    }
+
+    pub fn configure_size(&self) -> Option<(i32, i32)> {
+        self.app.configure_size
+    }
+
+    /// Dispatch until @p done holds, or give up after a few seconds.
+    pub fn dispatch_until(&mut self, what: &str, done: impl Fn(&Client) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done(self) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            self.roundtrip();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
@@ -132,6 +297,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.compositor = Some(registry.bind(name, version.min(6), qh, ()))
                 }
                 "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
+                "wl_subcompositor" => app.subcompositor = Some(registry.bind(name, 1, qh, ())),
+                "zwp_linux_dmabuf_v1" => {
+                    app.dmabuf = Some(registry.bind(name, version.min(3), qh, ()))
+                }
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
                 _ => {}
             }
@@ -176,7 +345,57 @@ delegate_noop!(App: ignore wl_surface::WlSurface);
 delegate_noop!(App: ignore wl_shm::WlShm);
 delegate_noop!(App: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(App: ignore wl_buffer::WlBuffer);
-delegate_noop!(App: ignore xdg_toplevel::XdgToplevel);
+delegate_noop!(App: ignore wl_region::WlRegion);
+delegate_noop!(App: ignore wl_subcompositor::WlSubcompositor);
+delegate_noop!(App: ignore wl_subsurface::WlSubsurface);
+delegate_noop!(App: ignore zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1);
+delegate_noop!(App: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
+
+impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &xdg_toplevel::XdgToplevel,
+        event: xdg_toplevel::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_toplevel::Event::Configure { width, height, .. } = event {
+            app.configure_size = Some((width, height));
+        }
+    }
+}
+
+/// A dma-buf buffer, identified by its index.
+impl Dispatch<wl_buffer::WlBuffer, usize> for App {
+    fn event(
+        app: &mut Self,
+        _: &wl_buffer::WlBuffer,
+        event: wl_buffer::Event,
+        index: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_buffer::Event::Release = event {
+            *app.released.entry(*index).or_default() += 1;
+        }
+    }
+}
+
+impl Dispatch<wl_callback::WlCallback, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            app.frames_done += 1;
+        }
+    }
+}
 
 impl Client {
     /// True once the server has gone away.
