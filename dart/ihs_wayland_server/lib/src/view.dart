@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! The view's `creationParams`, as the widget encodes them with Flutter's
 //! StandardMessageCodec: a map of string keys to strings, numbers or null.
 //!

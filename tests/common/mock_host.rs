@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! A stand-in for the shell's platform-view registry, installed with
 //! `ihs_pv_set_host` so the module runs against the real libihs_shared
 //! without a shell or a GPU. It records factory registration and plays the

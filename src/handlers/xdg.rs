@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 use smithay::delegate_xdg_shell;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::utils::Serial;

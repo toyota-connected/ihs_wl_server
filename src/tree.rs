@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! A toplevel's committed surface tree, as the layer list the shell draws.
 //!
 //! Every surface with a dma-buf attached becomes one layer, bottom to top in

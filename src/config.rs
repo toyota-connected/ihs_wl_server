@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 /// Owned, validated form of `IhsWlConfig`.
 #[derive(Clone, Debug, Default)]
 pub struct Config {

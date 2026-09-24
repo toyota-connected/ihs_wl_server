@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! Handing a view's layers to the shell, and getting the buffers back.
 //!
 //! Each submit dups the dma-buf fds (the registry consumes them whatever the

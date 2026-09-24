@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 // Drives the real libihs_wl_server.so over FFI. Build it first:
 //   cargo build            (from the repo root)
 // IHS_WL_LIB overrides the library path.

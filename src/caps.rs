@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! What the shell can import, which is what the dma-buf global offers
 //! clients: a format it cannot import would only fail later, in the shell.
 

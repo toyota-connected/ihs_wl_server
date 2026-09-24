@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Toyota Connected North America
+# SPDX-License-Identifier: Apache-2.0
+
 # Pinned to the rustc that meta-lts-mixins scarthgap/rust ships, so host and
 # Yocto builds use one compiler. Stock oe-core scarthgap has 1.75.0, which
 # cannot build smithay (MSRV 1.80.1); the image needs the lts-mixins layer.

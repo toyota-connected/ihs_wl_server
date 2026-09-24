@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! The `ihs_wl/toplevel` platform-view factory and per-view link.
 //!
 //! Dispose rule (platform_view.h header block): once `dispose` returns, no

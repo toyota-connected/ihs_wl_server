@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! A client's surface tree reaches its view as layers: binding by app_id,
 //! the layer list and its geometry, buffer ids and their retirement, and
 //! buffers going back to the client once the shell is done with them.

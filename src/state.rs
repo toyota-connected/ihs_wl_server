@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! All smithay protocol state, owned by the compositor thread.
 
 use std::collections::{BTreeMap, HashMap};

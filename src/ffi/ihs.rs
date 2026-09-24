@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! Bindings to the ivi-homescreen shared ABI (`libihs_shared.so.1`), generated
 //! by build.rs from the installed `ihs/*.h`.
 

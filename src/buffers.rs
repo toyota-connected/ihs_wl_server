@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! Buffer identity: a `buffer_id` per `wl_buffer`, the key the shell caches
 //! its import of the buffer under.
 //!

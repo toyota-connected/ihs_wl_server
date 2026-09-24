@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Toyota Connected North America
+# SPDX-License-Identifier: Apache-2.0
+
 [package]
 name = "ihs_wl_server"
 version = "0.1.0"

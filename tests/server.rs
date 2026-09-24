@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! A client maps a toplevel under the mock host, and the server
 //! starts and stops cleanly, repeatedly.
 

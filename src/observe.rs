@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Toyota Connected North America
+// SPDX-License-Identifier: Apache-2.0
+
 //! A Rust-only hook for watching the server from tests. The shell path needs
 //! none of this: a view finds its toplevel by activation token or app_id, so
 //! there is no event stream to Dart.
