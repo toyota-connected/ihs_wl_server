@@ -4,9 +4,12 @@
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::delegate_dmabuf;
-use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
+use smithay::reexports::wayland_server::DisplayHandle;
+use smithay::wayland::dmabuf::{
+    DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
+};
 
-use crate::caps::FormatModifier;
+use crate::caps::{Caps, FormatModifier};
 use crate::state::State;
 
 /// The dma-buf formats offered to clients: what the shell imports. A fourcc
@@ -21,6 +24,25 @@ pub fn formats(offered: &[FormatModifier]) -> Vec<Format> {
             })
         })
         .collect()
+}
+
+/// The linux-dmabuf global. With the shell's render device known it is v4,
+/// with default feedback naming that device as main_device: a client
+/// allocates on the GPU the shell imports on, and Mesa's Wayland EGL -- which
+/// finds its device through that feedback (or wl_drm, which is not offered) --
+/// renders on the GPU instead of falling back to software. Without it, v3.
+pub fn global(state: &mut DmabufState, dh: &DisplayHandle, caps: &Caps) -> DmabufGlobal {
+    let offered = formats(&caps.formats);
+    if let Some(device) = caps.render_device {
+        match DmabufFeedbackBuilder::new(device as libc::dev_t, offered.clone()).build() {
+            Ok(feedback) => {
+                tracing::info!(device, "dma-buf feedback: main device");
+                return state.create_global_with_default_feedback::<State>(dh, &feedback);
+            }
+            Err(e) => tracing::warn!("dma-buf feedback: {e}; offering v3"),
+        }
+    }
+    state.create_global::<State>(dh, offered)
 }
 
 impl DmabufHandler for State {

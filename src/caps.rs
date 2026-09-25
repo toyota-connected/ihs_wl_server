@@ -3,6 +3,7 @@
 
 //! What the shell can import, which is what the dma-buf global offers
 //! clients: a format it cannot import would only fail later, in the shell.
+//! And the GPU it imports on, which clients should allocate on.
 
 use crate::ffi::ihs::sys;
 
@@ -29,14 +30,30 @@ fn fallback() -> Vec<FormatModifier> {
         .collect()
 }
 
-/// The shell's importable formats, in its order of preference. Platform
-/// thread.
-pub fn import_formats() -> Vec<FormatModifier> {
+/// What the shell reports.
+pub struct Caps {
+    /// Importable formats, in the shell's order of preference.
+    pub formats: Vec<FormatModifier>,
+    /// The render node it imports on (a dev_t), when it can tell.
+    pub render_device: Option<u64>,
+}
+
+/// Ask the shell. Platform thread.
+pub fn query() -> Caps {
     let mut caps = sys::IhsPvCapabilities {
         struct_size: std::mem::size_of::<sys::IhsPvCapabilities>(),
         ..Default::default()
     };
     let rc = unsafe { sys::ihs_pv_query_capabilities(&mut caps) };
+    let render_device =
+        (rc == sys::IHS_PV_OK && caps.render_device != 0).then_some(caps.render_device);
+    Caps {
+        formats: import_formats(rc, &caps),
+        render_device,
+    }
+}
+
+fn import_formats(rc: i32, caps: &sys::IhsPvCapabilities) -> Vec<FormatModifier> {
     if rc != sys::IHS_PV_OK || caps.formats.is_null() || caps.format_count == 0 {
         return fallback();
     }
