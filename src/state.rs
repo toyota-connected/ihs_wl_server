@@ -63,6 +63,10 @@ pub struct State {
     pub syncobj_state: Option<DrmSyncobjState>,
     /// Buffers an EGL implementation shares over its own protocol.
     pub egl: crate::egl_display::EglBuffers,
+    /// gbm_buffer_backend, when the loaded libgbm can import its buffers.
+    pub gbm_buffer: Option<crate::gbm_buffer::GbmBufferState>,
+    /// What the shell imports.
+    pub caps: Caps,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
     /// Kept alive for the global's lifetime.
@@ -153,6 +157,8 @@ impl State {
             syncobj_state: crate::syncobj::device()
                 .map(|device| DrmSyncobjState::new::<Self>(&dh, device)),
             egl: crate::egl_display::EglBuffers::bind(&dh, caps),
+            gbm_buffer: crate::gbm_buffer::GbmBufferState::new(&dh),
+            caps: caps.clone(),
             data_device_state: DataDeviceState::new::<Self>(&dh),
             seat_state,
             seat,

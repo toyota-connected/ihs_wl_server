@@ -19,10 +19,13 @@ crate-type = ["cdylib", "rlib"]
 drm-ffi = "0.9"
 # The same gbm-sys smithay uses: vendor_gbm imports through gbm_bo_import
 # types the gbm crate does not wrap.
-gbm-sys = { version = "0.4", optional = true }
+gbm-sys = "0.4"
 libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+# Server code for protocols/, on smithay's wayland-server.
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
 
 [dependencies.smithay]
 version = "=0.7.0"
@@ -43,7 +46,7 @@ features = [
 # (EGL_WL_bind_wayland_display), for EGL implementations whose Wayland
 # clients need that rather than linux-dmabuf. Links libwayland-server;
 # loads libEGL at run time. No EGL context either way.
-egl-wl-display = ["dep:gbm-sys", "smithay/backend_egl", "smithay/use_system_lib"]
+egl-wl-display = ["smithay/backend_egl", "smithay/use_system_lib"]
 
 [build-dependencies]
 bindgen = "0.72"

@@ -169,14 +169,32 @@ fn frame_for(dmabuf: &Dmabuf, buffer_id: u32) -> Option<sys::IhsFrame> {
         .zip(dmabuf.offsets())
         .zip(dmabuf.strides())
         .take(4);
+    // Planes of one dma-buf go as one fd: the shell takes a frame whose
+    // planes share memory only that way.
+    let mut files: Vec<(u64, u64, i32)> = Vec::new();
     for (i, ((fd, offset), stride)) in planes.enumerate() {
-        match fd.try_clone_to_owned() {
-            Ok(owned) => frame.plane_fd[i] = owned.into_raw_fd(),
-            Err(e) => {
-                tracing::warn!("dup dma-buf plane: {e}");
-                close_frame(&frame);
-                return None;
-            }
+        let same = file_id(fd).and_then(|(dev, ino)| {
+            files
+                .iter()
+                .find(|&&(d, n, _)| (d, n) == (dev, ino))
+                .map(|&(_, _, raw)| raw)
+        });
+        match same {
+            Some(raw) => frame.plane_fd[i] = raw,
+            None => match fd.try_clone_to_owned() {
+                Ok(owned) => {
+                    let raw = owned.into_raw_fd();
+                    if let Some((dev, ino)) = file_id(fd) {
+                        files.push((dev, ino, raw));
+                    }
+                    frame.plane_fd[i] = raw;
+                }
+                Err(e) => {
+                    tracing::warn!("dup dma-buf plane: {e}");
+                    close_frame(&frame);
+                    return None;
+                }
+            },
         }
         frame.plane_offset[i] = offset;
         frame.plane_stride[i] = stride;
@@ -185,9 +203,20 @@ fn frame_for(dmabuf: &Dmabuf, buffer_id: u32) -> Option<sys::IhsFrame> {
     Some(frame)
 }
 
+/// The file behind @p fd: two fds of one dma-buf share it.
+fn file_id(fd: std::os::fd::BorrowedFd<'_>) -> Option<(u64, u64)> {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: a live fd and a stat buffer of the right size.
+    (unsafe { libc::fstat(std::os::fd::AsRawFd::as_raw_fd(&fd), &mut st) } == 0)
+        .then_some((st.st_dev, st.st_ino))
+}
+
 fn close_frame(frame: &sys::IhsFrame) {
+    // One fd may back several planes: close each once.
+    let mut closed: Vec<i32> = Vec::new();
     for &fd in &frame.plane_fd {
-        if fd >= 0 {
+        if fd >= 0 && !closed.contains(&fd) {
+            closed.push(fd);
             // SAFETY: a dup this module made and still owns.
             drop(unsafe { OwnedFd::from_raw_fd(fd) });
         }
