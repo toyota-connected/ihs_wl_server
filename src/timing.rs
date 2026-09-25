@@ -167,9 +167,17 @@ pub struct Taken {
 }
 
 impl Taken {
-    /// Take them from every surface of the tree rooted at @p root.
-    pub fn from_tree(root: &WlSurface) -> Self {
+    /// Take them from every surface of the trees at @p roots.
+    pub fn from_trees<'a>(roots: impl IntoIterator<Item = &'a WlSurface>) -> Self {
         let mut taken = Taken::default();
+        for root in roots {
+            taken.take_tree(root);
+        }
+        taken
+    }
+
+    fn take_tree(&mut self, root: &WlSurface) {
+        let taken = self;
         compositor::with_surface_tree_downward(
             root,
             (),
@@ -199,7 +207,6 @@ impl Taken {
             },
             |_, _, _| true,
         );
-        taken
     }
 
     pub fn has_barriers(&self) -> bool {

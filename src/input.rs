@@ -76,10 +76,13 @@ impl State {
         view_id: i32,
         at: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let toplevel = self.views.get(&view_id)?.toplevel?;
-        let root = self.toplevels.by_id.get(&toplevel)?.surface.wl_surface();
-        let origin = crate::tree::geometry_origin(root);
-        under_from_surface_tree(root, at, (-origin.x, -origin.y), WindowSurfaceType::ALL)
+        // Topmost first.
+        self.view_trees(view_id)
+            .iter()
+            .rev()
+            .find_map(|(root, start)| {
+                under_from_surface_tree(root, at, *start, WindowSurfaceType::ALL)
+            })
             .map(|(surface, loc)| (surface, loc.to_f64()))
     }
 
@@ -250,6 +253,8 @@ impl State {
             self.focused_view = Some(view_id);
         } else if self.focused_view == Some(view_id) {
             self.focused_view = None;
+            // As a click off a window would.
+            self.dismiss_popups(view_id);
         } else {
             return;
         }

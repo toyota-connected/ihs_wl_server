@@ -50,6 +50,7 @@ impl CompositorHandler for State {
             // Applied with its parent's commit, which submits the tree.
             return;
         }
+        self.popups.commit(surface);
         self.toplevel_commit(surface);
         self.popup_commit(surface);
         match self.bound_view_of(surface) {

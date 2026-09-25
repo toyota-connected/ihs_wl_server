@@ -112,15 +112,26 @@ pub struct Built {
     pub retired: Vec<u64>,
 }
 
-/// The layers of the tree rooted at @p root, bottom to top.
-pub fn build(root: &WlSurface, stager: &mut Stager) -> Built {
-    let origin = geometry_origin(root);
+/// The layers of a view's scene, bottom to top.
+pub fn build(trees: &[crate::popups::Tree], stager: &mut Stager) -> Built {
     let mut built = Built {
         layers: Vec::new(),
         skipped: 0,
         retired: Vec::new(),
     };
-    let start: Point<i32, Logical> = (-origin.x, -origin.y).into();
+    for (root, start) in trees {
+        build_tree(root, *start, stager, &mut built);
+    }
+    built
+}
+
+/// Add the layers of the tree at @p root, its origin at @p start.
+fn build_tree(
+    root: &WlSurface,
+    start: Point<i32, Logical>,
+    stager: &mut Stager,
+    built: &mut Built,
+) {
     compositor::with_surface_tree_upward(
         root,
         start,
@@ -182,7 +193,6 @@ pub fn build(root: &WlSurface, stager: &mut Stager) -> Built {
         },
         |_, _, _| true,
     );
-    built
 }
 
 /// The size of a dma-buf, for the frame description.

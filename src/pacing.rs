@@ -57,7 +57,7 @@ impl State {
 
     /// The tree rooted at @p root committed, but no view shows it.
     pub fn not_shown(&mut self, root: &WlSurface) {
-        let barriers = Taken::from_tree(root).not_shown();
+        let barriers = Taken::from_trees([root]).not_shown();
         self.hold_loose(root.client(), barriers);
     }
 
@@ -108,13 +108,12 @@ impl State {
         };
         entry.holds.presented(report.seq);
         let released = entry.frames.presented(&report, output);
-        let Some(t) = entry.toplevel.and_then(|id| self.toplevels.by_id.get(&id)) else {
-            return;
-        };
-        let root = t.surface.wl_surface().clone();
-        crate::submit::send_frame_callbacks(&root, report.ust_ns);
+        let trees = self.view_trees(view_id);
+        for (root, _) in &trees {
+            crate::submit::send_frame_callbacks(root, report.ust_ns);
+        }
         if released {
-            if let Some(client) = root.client() {
+            if let Some(client) = trees.first().and_then(|(root, _)| root.client()) {
                 self.unblock(&client);
             }
         }
@@ -127,6 +126,12 @@ impl State {
             return;
         };
         entry.suspended = suspended;
+        if suspended {
+            self.dismiss_popups(view_id);
+        }
+        let Some(entry) = self.views.get_mut(&view_id) else {
+            return;
+        };
         if suspended && entry.frames.next_stale().is_some() {
             self.schedule_tick(self.clock.next_vblank(now_ns()));
         }
