@@ -91,7 +91,7 @@ fn transform_value(t: Transform) -> u32 {
 
 /// The toplevel's window geometry origin: where its content starts within
 /// the surface, so client-side shadows and the like fall outside the view.
-fn geometry_origin(root: &WlSurface) -> Point<i32, Logical> {
+pub(crate) fn geometry_origin(root: &WlSurface) -> Point<i32, Logical> {
     compositor::with_states(root, |states| {
         states
             .cached_state

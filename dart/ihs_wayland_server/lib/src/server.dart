@@ -6,7 +6,11 @@ import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 
 import 'bindings.g.dart';
+import 'input.dart';
 import 'loader.dart';
+
+/// Where views send input: the running server's, if one was started.
+WaylandInput? get waylandInput => WaylandServer._instance?._input;
 
 /// A failed call into libihs_wl_server.
 class WaylandServerException implements Exception {
@@ -30,6 +34,8 @@ class WaylandServer {
   WaylandServer._(this._lib);
 
   final IhsWlBindings _lib;
+
+  late final WaylandInput _input = WaylandInput(_lib);
 
   static WaylandServer? _instance;
 

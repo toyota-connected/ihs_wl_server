@@ -47,7 +47,7 @@ const MAX_IN_FLIGHT: usize = 16;
 
 /// How long a frame of a view on screen may go unreported before its fifo
 /// barriers are cleared anyway, so a client can always make progress.
-pub const STALE_NS: u64 = 250_000_000;
+pub(crate) const STALE_NS: u64 = 250_000_000;
 
 /// CLOCK_MONOTONIC, which the shell's reports and wp_presentation use.
 pub fn now_ns() -> u64 {

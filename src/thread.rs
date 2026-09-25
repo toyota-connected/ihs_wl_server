@@ -46,6 +46,24 @@ pub enum Cmd {
         view_id: i32,
         suspended: bool,
     },
+    Pointer {
+        view_id: i32,
+        event: crate::IhsWlPointerEvent,
+    },
+    Touch {
+        view_id: i32,
+        event: crate::IhsWlTouchEvent,
+    },
+    Key {
+        view_id: i32,
+        evdev: u32,
+        pressed: bool,
+        time_us: u64,
+    },
+    Focus {
+        view_id: i32,
+        focused: bool,
+    },
 }
 
 struct Running {

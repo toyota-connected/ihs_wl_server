@@ -15,9 +15,10 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_region, wl_registry, wl_shm, wl_shm_pool,
-    wl_subcompositor, wl_subsurface, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_pointer, wl_region, wl_registry,
+    wl_seat, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface, wl_touch,
 };
+use wayland_client::Proxy;
 use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandle};
 use wayland_protocols::wp::commit_timing::v1::client::{
     wp_commit_timer_v1, wp_commit_timing_manager_v1,
@@ -58,6 +59,77 @@ struct App {
     syncobj_manager: Option<wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1>,
     /// Presentation feedback outcomes, by the tag they were asked with.
     feedback: HashMap<usize, Feedback>,
+    seat: Option<wl_seat::WlSeat>,
+    pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    touch: Option<wl_touch::WlTouch>,
+    /// Input events, in arrival order.
+    input: Vec<Input>,
+}
+
+/// A seat event, with the surface it names as its protocol id.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input {
+    Enter {
+        surface: u32,
+        x: f64,
+        y: f64,
+    },
+    Leave {
+        surface: u32,
+    },
+    Motion {
+        x: f64,
+        y: f64,
+    },
+    Button {
+        button: u32,
+        pressed: bool,
+    },
+    Axis {
+        horizontal: bool,
+        value: f64,
+    },
+    AxisSource(u32),
+    AxisValue120 {
+        horizontal: bool,
+        value120: i32,
+    },
+    Frame,
+    Keymap,
+    RepeatInfo {
+        rate: i32,
+        delay: i32,
+    },
+    KeyEnter {
+        surface: u32,
+    },
+    KeyLeave {
+        surface: u32,
+    },
+    Key {
+        key: u32,
+        pressed: bool,
+    },
+    Modifiers {
+        depressed: u32,
+    },
+    TouchDown {
+        surface: u32,
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+    TouchUp {
+        id: i32,
+    },
+    TouchMotion {
+        id: i32,
+        x: f64,
+        y: f64,
+    },
+    TouchFrame,
+    TouchCancel,
 }
 
 /// What a wp_presentation_feedback came to.
@@ -81,6 +153,7 @@ pub struct Client {
     app: App,
     _surface: Option<wl_surface::WlSurface>,
     _toplevel: Option<xdg_toplevel::XdgToplevel>,
+    xdg: Option<xdg_surface::XdgSurface>,
     /// dma-buf buffers, by index, and the memfds behind them.
     buffers: Vec<Option<(wl_buffer::WlBuffer, File)>>,
     sub_surface: Option<(wl_surface::WlSurface, wl_subsurface::WlSubsurface)>,
@@ -107,6 +180,7 @@ impl Client {
             app,
             _surface: None,
             _toplevel: None,
+            xdg: None,
             buffers: Vec::new(),
             sub_surface: None,
             fifo: None,
@@ -161,6 +235,7 @@ impl Client {
         self.queue.roundtrip(&mut self.app).unwrap();
         self._surface = Some(surface);
         self._toplevel = Some(toplevel);
+        self.xdg = Some(xdg);
     }
 
     pub fn roundtrip(&mut self) {
@@ -191,6 +266,7 @@ impl Client {
         }
         self._surface = Some(surface);
         self._toplevel = Some(toplevel);
+        self.xdg = Some(xdg);
     }
 
     /// A linux-dmabuf buffer of @p width x @p height XRGB8888 over a memfd.
@@ -423,6 +499,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wp_commit_timing_manager_v1" => {
                     app.timing_manager = Some(registry.bind(name, 1, qh, ()))
                 }
+                "wl_seat" => app.seat = Some(registry.bind(name, version.min(9), qh, ())),
                 _ => {}
             }
             app.globals.push(interface);
@@ -723,5 +800,193 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for Ap
             }
             _ => {}
         }
+    }
+}
+
+impl Client {
+    /// The toplevel's and the subsurface's protocol ids.
+    pub fn surface_id(&self, sub: bool) -> u32 {
+        self.surface_of(sub).id().protocol_id()
+    }
+
+    /// Get whichever of pointer, keyboard and touch the seat has.
+    pub fn use_seat(&mut self) {
+        self.dispatch_until("seat capabilities", |c| {
+            c.app.pointer.is_some() && c.app.keyboard.is_some() && c.app.touch.is_some()
+        });
+    }
+
+    /// Input events so far, and forget them.
+    pub fn take_input(&mut self) -> Vec<Input> {
+        std::mem::take(&mut self.app.input)
+    }
+
+    /// Dispatch until the input events so far include @p want, in that
+    /// order though not necessarily adjacent; return them all.
+    pub fn wait_input(&mut self, what: &str, want: &[Input]) -> Vec<Input> {
+        self.dispatch_until(what, |c| {
+            let mut want = want.iter().peekable();
+            for got in &c.app.input {
+                if want.peek() == Some(&got) {
+                    want.next();
+                }
+            }
+            want.peek().is_none()
+        });
+        self.take_input()
+    }
+
+    /// Set the toplevel's window geometry at its next commit, and commit.
+    pub fn set_window_geometry(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        let xdg = self.xdg.as_ref().unwrap();
+        xdg.set_window_geometry(x, y, width, height);
+        self._surface.as_ref().unwrap().commit();
+        self.roundtrip();
+    }
+}
+
+impl Dispatch<wl_seat::WlSeat, ()> for App {
+    fn event(
+        app: &mut Self,
+        seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: wayland_client::WEnum::Value(caps),
+        } = event
+        {
+            if caps.contains(wl_seat::Capability::Pointer) && app.pointer.is_none() {
+                app.pointer = Some(seat.get_pointer(qh, ()));
+            }
+            if caps.contains(wl_seat::Capability::Keyboard) && app.keyboard.is_none() {
+                app.keyboard = Some(seat.get_keyboard(qh, ()));
+            }
+            if caps.contains(wl_seat::Capability::Touch) && app.touch.is_none() {
+                app.touch = Some(seat.get_touch(qh, ()));
+            }
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use wayland_client::WEnum::Value;
+        let horizontal = |a: &wayland_client::WEnum<wl_pointer::Axis>| {
+            matches!(a, Value(wl_pointer::Axis::HorizontalScroll))
+        };
+        let input = match event {
+            wl_pointer::Event::Enter {
+                surface,
+                surface_x,
+                surface_y,
+                ..
+            } => Input::Enter {
+                surface: surface.id().protocol_id(),
+                x: surface_x,
+                y: surface_y,
+            },
+            wl_pointer::Event::Leave { surface, .. } => Input::Leave {
+                surface: surface.id().protocol_id(),
+            },
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => Input::Motion {
+                x: surface_x,
+                y: surface_y,
+            },
+            wl_pointer::Event::Button { button, state, .. } => Input::Button {
+                button,
+                pressed: matches!(state, Value(wl_pointer::ButtonState::Pressed)),
+            },
+            wl_pointer::Event::Axis { axis, value, .. } => Input::Axis {
+                horizontal: horizontal(&axis),
+                value,
+            },
+            wl_pointer::Event::AxisSource { axis_source } => Input::AxisSource(match axis_source {
+                Value(s) => s as u32,
+                wayland_client::WEnum::Unknown(v) => v,
+            }),
+            wl_pointer::Event::AxisValue120 { axis, value120 } => Input::AxisValue120 {
+                horizontal: horizontal(&axis),
+                value120,
+            },
+            wl_pointer::Event::Frame => Input::Frame,
+            _ => return,
+        };
+        app.input.push(input);
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let input = match event {
+            wl_keyboard::Event::Keymap { .. } => Input::Keymap,
+            wl_keyboard::Event::RepeatInfo { rate, delay } => Input::RepeatInfo { rate, delay },
+            wl_keyboard::Event::Enter { surface, .. } => Input::KeyEnter {
+                surface: surface.id().protocol_id(),
+            },
+            wl_keyboard::Event::Leave { surface, .. } => Input::KeyLeave {
+                surface: surface.id().protocol_id(),
+            },
+            wl_keyboard::Event::Key { key, state, .. } => Input::Key {
+                key,
+                pressed: matches!(
+                    state,
+                    wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed)
+                ),
+            },
+            wl_keyboard::Event::Modifiers { mods_depressed, .. } => Input::Modifiers {
+                depressed: mods_depressed,
+            },
+            _ => return,
+        };
+        app.input.push(input);
+    }
+}
+
+impl Dispatch<wl_touch::WlTouch, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let input = match event {
+            wl_touch::Event::Down {
+                surface, id, x, y, ..
+            } => Input::TouchDown {
+                surface: surface.id().protocol_id(),
+                id,
+                x,
+                y,
+            },
+            wl_touch::Event::Up { id, .. } => Input::TouchUp { id },
+            wl_touch::Event::Motion { id, x, y, .. } => Input::TouchMotion { id, x, y },
+            wl_touch::Event::Frame => Input::TouchFrame,
+            wl_touch::Event::Cancel => Input::TouchCancel,
+            _ => return,
+        };
+        app.input.push(input);
     }
 }
