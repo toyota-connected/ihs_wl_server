@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use smithay::delegate_xdg_shell;
+use smithay::desktop::PopupKind;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::utils::Serial;
 use smithay::wayland::shell::xdg::{
@@ -36,10 +37,22 @@ impl XdgShellHandler for State {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        // Not yet constrained to the toplevel's bounds.
-        surface.with_pending_state(|state| {
-            state.geometry = positioner.get_geometry();
-        });
+        surface.with_pending_state(|state| state.positioner = positioner);
+        self.constrain_popup(&surface);
+        if let Err(e) = self.popups.track_popup(PopupKind::Xdg(surface)) {
+            tracing::warn!("track popup: {e:?}");
+        }
+    }
+
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        // Its layers go with it.
+        let view = surface
+            .get_parent_surface()
+            .and_then(|parent| self.bound_view_of(&parent));
+        self.popups.cleanup();
+        if let Some(view_id) = view {
+            self.submit_view(view_id);
+        }
     }
 
     fn reposition_request(
@@ -48,15 +61,13 @@ impl XdgShellHandler for State {
         positioner: PositionerState,
         token: u32,
     ) {
-        surface.with_pending_state(|state| {
-            state.geometry = positioner.get_geometry();
-            state.positioner = positioner;
-        });
+        surface.with_pending_state(|state| state.positioner = positioner);
+        self.constrain_popup(&surface);
         surface.send_repositioned(token);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
-        // Popup grabs need seat input, which is not wired up yet.
+    fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        self.grab_popup(surface, serial);
     }
 }
 

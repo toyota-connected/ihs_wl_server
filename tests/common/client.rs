@@ -36,7 +36,9 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
 };
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
-use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::shell::client::{
+    xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 
 #[derive(Default)]
 struct App {
@@ -78,6 +80,11 @@ struct App {
     /// wl_surface.enter events, by surface protocol id.
     entered: HashMap<u32, u32>,
     toplevel_surface: u32,
+    /// The serial of the last wl_pointer.button.
+    button_serial: Option<u32>,
+    /// The popup's last xdg_popup.configure: x, y, width, height.
+    popup_geometry: Option<(i32, i32, i32, i32)>,
+    popup_done: bool,
 }
 
 /// A seat event, with the surface it names as its protocol id.
@@ -168,6 +175,11 @@ pub struct Client {
     _toplevel: Option<xdg_toplevel::XdgToplevel>,
     xdg: Option<xdg_surface::XdgSurface>,
     fractional: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    popup: Option<(
+        wl_surface::WlSurface,
+        xdg_surface::XdgSurface,
+        xdg_popup::XdgPopup,
+    )>,
     viewport: Option<wp_viewport::WpViewport>,
     /// dma-buf buffers, by index, and the memfds behind them.
     buffers: Vec<Option<(wl_buffer::WlBuffer, File)>>,
@@ -197,6 +209,7 @@ impl Client {
             _toplevel: None,
             xdg: None,
             fractional: None,
+            popup: None,
             viewport: None,
             buffers: Vec::new(),
             sub_surface: None,
@@ -979,10 +992,18 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
                 x: surface_x,
                 y: surface_y,
             },
-            wl_pointer::Event::Button { button, state, .. } => Input::Button {
+            wl_pointer::Event::Button {
                 button,
-                pressed: matches!(state, Value(wl_pointer::ButtonState::Pressed)),
-            },
+                state,
+                serial,
+                ..
+            } => {
+                app.button_serial = Some(serial);
+                Input::Button {
+                    button,
+                    pressed: matches!(state, Value(wl_pointer::ButtonState::Pressed)),
+                }
+            }
             wl_pointer::Event::Axis { axis, value, .. } => Input::Axis {
                 horizontal: horizontal(&axis),
                 value,
@@ -1106,5 +1127,106 @@ impl Client {
             .as_ref()
             .unwrap()
             .set_destination(width, height);
+    }
+}
+
+/// Where a popup goes, relative to its parent's window geometry.
+pub struct Placement {
+    pub anchor: (i32, i32, i32, i32),
+    pub size: (i32, i32),
+    /// xdg_positioner.constraint_adjustment bits.
+    pub adjust: u32,
+}
+
+impl Client {
+    /// Open a popup of the toplevel as @p at says, over a @p size buffer,
+    /// grabbing with the last button serial when @p grab. Waits for its
+    /// configure, then maps it.
+    pub fn open_popup(&mut self, at: Placement, grab: bool) {
+        let qh = self.queue.handle();
+        let wm_base = self.app.wm_base.as_ref().unwrap();
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(at.size.0, at.size.1);
+        let (x, y, w, h) = at.anchor;
+        positioner.set_anchor_rect(x, y, w, h);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+        positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        positioner.set_constraint_adjustment(
+            xdg_positioner::ConstraintAdjustment::from_bits_truncate(at.adjust),
+        );
+        let surface = self
+            .app
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let popup = xdg.get_popup(self.xdg.as_ref(), &positioner, &qh, ());
+        positioner.destroy();
+        if grab {
+            let serial = self
+                .app
+                .button_serial
+                .expect("no button serial to grab with");
+            popup.grab(self.app.seat.as_ref().unwrap(), serial);
+        }
+        self.app.popup_geometry = None;
+        self.app.popup_done = false;
+        surface.commit();
+        self.dispatch_until("popup configure", |c| c.app.popup_geometry.is_some());
+        let buffer = self.new_dmabuf(at.size.0, at.size.1);
+        let (wl_buffer, _) = self.buffers[buffer].as_ref().unwrap();
+        surface.attach(Some(wl_buffer), 0, 0);
+        surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        surface.commit();
+        self.roundtrip();
+        self.popup = Some((surface, xdg, popup));
+    }
+
+    /// The popup's configured x, y, width and height.
+    pub fn popup_geometry(&self) -> Option<(i32, i32, i32, i32)> {
+        self.app.popup_geometry
+    }
+
+    pub fn popup_done(&self) -> bool {
+        self.app.popup_done
+    }
+
+    pub fn popup_surface_id(&self) -> u32 {
+        self.popup.as_ref().expect("no popup").0.id().protocol_id()
+    }
+
+    /// Destroy the popup, as a client does once it is done.
+    pub fn close_popup(&mut self) {
+        if let Some((surface, xdg, popup)) = self.popup.take() {
+            popup.destroy();
+            xdg.destroy();
+            surface.destroy();
+        }
+        self.roundtrip();
+    }
+}
+
+delegate_noop!(App: ignore xdg_positioner::XdgPositioner);
+
+impl Dispatch<xdg_popup::XdgPopup, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &xdg_popup::XdgPopup,
+        event: xdg_popup::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_popup::Event::Configure {
+                x,
+                y,
+                width,
+                height,
+            } => app.popup_geometry = Some((x, y, width, height)),
+            xdg_popup::Event::PopupDone => app.popup_done = true,
+            _ => {}
+        }
     }
 }

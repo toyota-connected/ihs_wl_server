@@ -29,32 +29,30 @@ impl FractionalScaleHandler for State {
 delegate_fractional_scale!(State);
 
 impl State {
-    /// Tell every surface of the tree view @p view_id shows its scale.
+    /// Tell every surface of the scene view @p view_id shows its scale.
     /// Each signal is only sent when it changes.
     pub fn scale_tree(&mut self, view_id: i32) {
-        let Some(entry) = self.views.get(&view_id) else {
+        let Some(dpr) = self.views.get(&view_id).map(|v| v.dpr) else {
             return;
         };
-        let Some(t) = entry.toplevel.and_then(|id| self.toplevels.by_id.get(&id)) else {
-            return;
-        };
-        let dpr = entry.dpr;
         let output = &self.output;
-        compositor::with_surface_tree_downward(
-            t.surface.wl_surface(),
-            (),
-            |_, _, _| TraversalAction::DoChildren(()),
-            |surface, states, _| {
-                with_fractional_scale(states, |fs| fs.set_preferred_scale(dpr));
-                compositor::send_surface_state(
-                    surface,
-                    states,
-                    dpr.ceil() as i32,
-                    Transform::Normal,
-                );
-                output.enter(surface);
-            },
-            |_, _, _| true,
-        );
+        for (root, _) in self.view_trees(view_id) {
+            compositor::with_surface_tree_downward(
+                &root,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |surface, states, _| {
+                    with_fractional_scale(states, |fs| fs.set_preferred_scale(dpr));
+                    compositor::send_surface_state(
+                        surface,
+                        states,
+                        dpr.ceil() as i32,
+                        Transform::Normal,
+                    );
+                    output.enter(surface);
+                },
+                |_, _, _| true,
+            );
+        }
     }
 }

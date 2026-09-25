@@ -8,6 +8,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use smithay::desktop::PopupManager;
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, Scale};
 use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
@@ -76,6 +77,7 @@ pub struct State {
     pub output: Output,
 
     pub toplevels: Toplevels,
+    pub popups: PopupManager,
     /// Live platform views, by Flutter view id.
     pub views: HashMap<i32, ViewEntry>,
     pub buffers: BufferIds,
@@ -159,6 +161,7 @@ impl State {
             loop_signal,
             loop_handle,
             toplevels: Toplevels::default(),
+            popups: PopupManager::default(),
             views: HashMap::new(),
             buffers: BufferIds::default(),
             stager: crate::staging::Stager::default(),
@@ -386,13 +389,10 @@ impl State {
         }
     }
 
-    /// The toplevel whose tree @p surface belongs to, if it is bound, and
-    /// its view.
+    /// The view showing the toplevel @p surface belongs to, popups
+    /// included, if it is bound.
     pub fn bound_view_of(&self, surface: &WlSurface) -> Option<i32> {
-        let mut root = surface.clone();
-        while let Some(parent) = compositor::get_parent(&root) {
-            root = parent;
-        }
+        let root = crate::popups::toplevel_of(&self.popups, surface);
         let id = Toplevels::id_of(&root)?;
         self.toplevels.by_id.get(&id)?.view
     }

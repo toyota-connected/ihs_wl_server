@@ -29,6 +29,7 @@ mod nodes;
 pub mod observe;
 mod pacing;
 mod params;
+mod popups;
 mod staging;
 mod state;
 mod submit;

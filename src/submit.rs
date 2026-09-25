@@ -208,10 +208,11 @@ impl State {
             return;
         };
         let root = toplevel.surface.wl_surface().clone();
-        // Surfaces new to the tree learn its scale.
+        // Surfaces new to the scene learn its scale.
         self.scale_tree(view_id);
-        let taken = Taken::from_tree(&root);
-        let Some((seq, shown)) = self.submit_tree(view_id, &root) else {
+        let trees = self.view_trees(view_id);
+        let taken = Taken::from_trees(trees.iter().map(|(s, _)| s));
+        let Some((seq, shown)) = self.submit_tree(view_id, &trees) else {
             self.hold_loose(root.client(), taken.not_shown());
             return;
         };
@@ -227,10 +228,14 @@ impl State {
         }
     }
 
-    /// Submit the layers of the tree at @p root; the seq it went as, and the
+    /// Submit the layers of the scene @p trees; the seq it went as, and the
     /// (layer id, content generation) of each layer.
-    fn submit_tree(&mut self, view_id: i32, root: &WlSurface) -> Option<(u64, Vec<(u32, u64)>)> {
-        let built = tree::build(root, &mut self.stager);
+    fn submit_tree(
+        &mut self,
+        view_id: i32,
+        trees: &[crate::popups::Tree],
+    ) -> Option<(u64, Vec<(u32, u64)>)> {
+        let built = tree::build(trees, &mut self.stager);
         for uid in &built.retired {
             self.retire_key(&BufferKey::Staged(*uid));
         }

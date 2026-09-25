@@ -52,6 +52,10 @@ Early development. Working today:
   commit with a target time is applied one refresh ahead of the first vblank
   at or after it. For views off screen, a clock at the display's refresh
   stands in for the reports.
+- Popups (menus, tooltips) show above their toplevel in its view, placed
+  inside it as their positioner allows. A popup that grabs keeps input on
+  its client until a press lands outside it; popups also close when their
+  view loses keyboard focus or leaves the scene.
 - Scale follows the view's device pixel ratio (the widget passes it at
   creation). The toplevel is configured in logical pixels, and every surface
   is told the ratio through `wp_fractional_scale_v1`, rounded up through
@@ -69,7 +73,7 @@ Early development. Working today:
 Not yet implemented:
 
 - Binding a view to its toplevel by activation token.
-- Per-surface dma-buf feedback (scanout tranches), cursor shape and popups.
+- Per-surface dma-buf feedback (scanout tranches) and cursor shape.
 
 `ihs_wl_activation_token` exists but returns `IHS_WL_RESULT_ERR_UNSUPPORTED`
 for now.
