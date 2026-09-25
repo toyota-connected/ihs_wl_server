@@ -3,6 +3,7 @@
 
 mod compositor;
 pub mod dmabuf;
+mod fractional;
 pub mod output;
 mod seat;
 mod syncobj;

@@ -18,6 +18,23 @@ pub fn params(app_id: &str) -> Vec<u8> {
     b
 }
 
+/// creationParams for `{'app_id': app_id, 'dpr': dpr}`. A float64 is
+/// aligned to 8 bytes from the start of the message.
+pub fn params_dpr(app_id: &str, dpr: f64) -> Vec<u8> {
+    let mut b = vec![13u8, 2]; // map, 2 entries
+    for s in ["app_id", app_id, "dpr"] {
+        b.push(7);
+        b.push(s.len() as u8);
+        b.extend_from_slice(s.as_bytes());
+    }
+    b.push(6); // float64
+    while b.len() % 8 != 0 {
+        b.push(0);
+    }
+    b.extend_from_slice(&dpr.to_le_bytes());
+    b
+}
+
 pub struct Harness {
     pub rec: Recorder,
     pub client: Client,
@@ -37,14 +54,14 @@ impl Harness {
 
     /// Create view @p view bound by @p app_id, and wait for it to bind.
     pub fn bind(&self, view: i32, app_id: &str, width: f64, height: f64) {
+        self.bind_with(view, &params(app_id), width, height);
+    }
+
+    /// Create view @p view with creationParams @p params, @p width x
+    /// @p height logical pixels, and wait for it to bind.
+    pub fn bind_with(&self, view: i32, params: &[u8], width: f64, height: f64) {
         assert_eq!(
-            mock_host::create_view_with_params(
-                "ihs_wl/toplevel",
-                view,
-                width,
-                height,
-                &params(app_id)
-            ),
+            mock_host::create_view_with_params("ihs_wl/toplevel", view, width, height, params),
             0
         );
         self.rec.wait_for("ViewBound", |e| {

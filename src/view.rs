@@ -35,8 +35,8 @@ pub struct ViewShared {
     pub id: i32,
     /// What the widget passed in creationParams: what to bind to.
     pub params: ViewParams,
-    /// Its size at creation, in the units `resize` uses; the view is laid out
-    /// before it is created, so no resize may follow.
+    /// Its size at creation in physical pixels, as `resize` reports it; the
+    /// view is laid out before it is created, so no resize may follow.
     pub size: Option<(i32, i32)>,
     pub link: Mutex<Option<ViewLink>>,
 }
@@ -134,7 +134,12 @@ unsafe extern "C" fn factory(
                 (*info).params_size,
             ))
         };
-        let (w, h) = ((*info).width.round(), (*info).height.round());
+        // Created at its logical size (what the widget laid out).
+        let dpr = params.dpr.unwrap_or(1.0);
+        let (w, h) = (
+            ((*info).width * dpr).round(),
+            ((*info).height * dpr).round(),
+        );
         let shared = Arc::new(ViewShared {
             id,
             params,

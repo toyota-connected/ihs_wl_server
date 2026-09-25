@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use smithay::input::{Seat, SeatState};
-use smithay::output::Output;
+use smithay::output::{Output, Scale};
 use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -19,6 +19,7 @@ use smithay::wayland::compositor::{self, CompositorClientState, CompositorState}
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
 use smithay::wayland::drm_syncobj::DrmSyncobjState;
 use smithay::wayland::fifo::FifoManagerState;
+use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -53,6 +54,8 @@ pub struct State {
     pub presentation_state: PresentationState,
     #[allow(dead_code)]
     pub fifo_manager_state: FifoManagerState,
+    #[allow(dead_code)]
+    pub fractional_scale_state: FractionalScaleManagerState,
     #[allow(dead_code)]
     pub commit_timing_manager_state: CommitTimingManagerState,
     /// Explicit sync, when a render node can wait on syncobjs.
@@ -104,6 +107,8 @@ pub struct ViewEntry {
     pub toplevel: Option<i64>,
     /// Its laid-out size in physical pixels, once known.
     pub size: Option<(i32, i32)>,
+    /// Physical pixels per logical one.
+    pub dpr: f64,
     /// The seq of its last submit.
     pub seq: u64,
     /// Buffers the shell may still be using.
@@ -129,7 +134,8 @@ impl State {
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_global = crate::handlers::dmabuf::global(&mut dmabuf_state, &dh, caps);
         State {
-            compositor_state: CompositorState::new::<Self>(&dh),
+            // v6: preferred_buffer_scale, the integer fallback for scale.
+            compositor_state: CompositorState::new_v6::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
             shm_state: ShmState::new::<Self>(&dh, vec![]),
             dmabuf_state,
@@ -138,6 +144,7 @@ impl State {
             // The shell reports CLOCK_MONOTONIC times.
             presentation_state: PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32),
             fifo_manager_state: FifoManagerState::new::<Self>(&dh),
+            fractional_scale_state: FractionalScaleManagerState::new::<Self>(&dh),
             commit_timing_manager_state: CommitTimingManagerState::new::<Self>(&dh),
             syncobj_state: crate::syncobj::device()
                 .map(|device| DrmSyncobjState::new::<Self>(&dh, device)),
@@ -200,6 +207,10 @@ impl State {
             Cmd::ViewCreated(view) => {
                 let id = view.id;
                 let size = view.size;
+                let dpr = view.params.dpr.unwrap_or(1.0);
+                // One output stands for the display every view is on.
+                self.output
+                    .change_current_state(None, None, Some(Scale::Fractional(dpr)), None);
                 if self.views.contains_key(&id) {
                     // A create under a live id disposes the incumbent first
                     // (hot restart), so this is only an ordering race.
@@ -212,6 +223,7 @@ impl State {
                         handle: view,
                         toplevel: None,
                         size,
+                        dpr,
                         seq: 0,
                         holds: Holds::default(),
                         cleared: false,
@@ -293,6 +305,9 @@ impl State {
             view_id,
             toplevel_id,
         });
+        // Known before the first configure, so the client sizes its first
+        // buffer for it.
+        self.scale_tree(view_id);
         self.configure_view(view_id);
         self.refresh_keyboard_focus();
         // Show what the toplevel already has; a static client may never
@@ -341,8 +356,7 @@ impl State {
         }
     }
 
-    /// Size the view's toplevel to the view. One logical pixel per physical
-    /// one for now: scale comes with fractional-scale support.
+    /// Size the view's toplevel to the view, in logical pixels.
     pub fn configure_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
@@ -350,6 +364,10 @@ impl State {
         let (Some(toplevel_id), Some((w, h))) = (entry.toplevel, entry.size) else {
             return;
         };
+        let (w, h) = (
+            (w as f64 / entry.dpr).round() as i32,
+            (h as f64 / entry.dpr).round() as i32,
+        );
         let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };

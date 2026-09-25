@@ -52,6 +52,12 @@ Early development. Working today:
   commit with a target time is applied one refresh ahead of the first vblank
   at or after it. For views off screen, a clock at the display's refresh
   stands in for the reports.
+- Scale follows the view's device pixel ratio (the widget passes it at
+  creation). The toplevel is configured in logical pixels, and every surface
+  is told the ratio through `wp_fractional_scale_v1`, rounded up through
+  `wl_surface.preferred_buffer_scale`, and through the output it enters. A
+  client that renders at it attaches buffers the size of the view on screen,
+  which the shell shows 1:1.
 - Pointer, touch and keyboard input go straight from the Dart view to the
   module over FFI, in view-local logical pixels. What is under a point is
   hit-tested against the tree the view shows, input regions included. The
@@ -63,8 +69,7 @@ Early development. Working today:
 Not yet implemented:
 
 - Binding a view to its toplevel by activation token.
-- Per-surface dma-buf feedback (scanout tranches), fractional scale, cursor
-  shape and popups.
+- Per-surface dma-buf feedback (scanout tranches), cursor shape and popups.
 
 `ihs_wl_activation_token` exists but returns `IHS_WL_RESULT_ERR_UNSUPPORTED`
 for now.
