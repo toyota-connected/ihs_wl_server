@@ -36,6 +36,18 @@ pub struct Caps {
     pub formats: Vec<FormatModifier>,
     /// The render node it imports on (a dev_t), when it can tell.
     pub render_device: Option<u64>,
+    /// The shell's EGL display and config, when it samples image layers
+    /// (IHS_PV_KIND_TEXTURE_EGL_IMAGE): EGLImages are made on that display.
+    #[cfg_attr(not(feature = "egl-wl-display"), allow(dead_code))]
+    pub egl_images: Option<ShellEgl>,
+}
+
+/// The shell's EGLDisplay and EGLConfig, as addresses.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "egl-wl-display"), allow(dead_code))]
+pub struct ShellEgl {
+    pub display: usize,
+    pub config: usize,
 }
 
 /// Ask the shell. Platform thread.
@@ -47,10 +59,29 @@ pub fn query() -> Caps {
     let rc = unsafe { sys::ihs_pv_query_capabilities(&mut caps) };
     let render_device =
         (rc == sys::IHS_PV_OK && caps.render_device != 0).then_some(caps.render_device);
+    let egl_images = (rc == sys::IHS_PV_OK && caps.kinds & sys::IHS_PV_KIND_TEXTURE_EGL_IMAGE != 0)
+        .then(shell_egl)
+        .flatten();
     Caps {
         formats: import_formats(rc, &caps),
         render_device,
+        egl_images,
     }
+}
+
+/// The shell's EGL display and config. Platform thread.
+fn shell_egl() -> Option<ShellEgl> {
+    let mut egl = sys::IhsEglContext {
+        struct_size: std::mem::size_of::<sys::IhsEglContext>(),
+        ..Default::default()
+    };
+    let rc = unsafe { sys::ihs_pv_egl_context(&mut egl) };
+    (rc == sys::IHS_PV_OK && !egl.egl_display.is_null() && !egl.egl_config.is_null()).then_some(
+        ShellEgl {
+            display: egl.egl_display as usize,
+            config: egl.egl_config as usize,
+        },
+    )
 }
 
 fn import_formats(rc: i32, caps: &sys::IhsPvCapabilities) -> Vec<FormatModifier> {

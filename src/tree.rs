@@ -23,6 +23,7 @@ use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
 use crate::buffers::BufferKey;
+use crate::egl_display::Content;
 use crate::staging::{self, Stager};
 
 /// What keeps a layer's buffer from the client until the shell is done.
@@ -53,7 +54,7 @@ pub struct LayerSpec {
     pub held: Held,
     /// What its buffer id is keyed by.
     pub key: BufferKey,
-    pub dmabuf: Dmabuf,
+    pub content: Content,
     /// The part of the buffer shown, in its own pixels, before `transform`.
     pub src: Rectangle<f64, smithay::utils::Buffer>,
     /// Where it lands, in view-local pixels.
@@ -86,6 +87,21 @@ fn transform_value(t: Transform) -> u32 {
         Transform::Flipped90 => 5,
         Transform::Flipped180 => 6,
         Transform::Flipped270 => 7,
+    }
+}
+
+/// @p t applied to a buffer stored upside down: the vertical flip
+/// (FLIPPED_180) first, then @p t.
+fn after_y_flip(t: Transform) -> Transform {
+    match t {
+        Transform::Normal => Transform::Flipped180,
+        Transform::_90 => Transform::Flipped270,
+        Transform::_180 => Transform::Flipped,
+        Transform::_270 => Transform::Flipped90,
+        Transform::Flipped => Transform::_180,
+        Transform::Flipped90 => Transform::_270,
+        Transform::Flipped180 => Transform::Normal,
+        Transform::Flipped270 => Transform::_90,
     }
 }
 
@@ -159,21 +175,25 @@ fn build_tree(
             else {
                 return;
             };
-            let (dmabuf, held, key) = match get_dmabuf(buffer) {
+            let (content, held, key) = match get_dmabuf(buffer) {
                 Ok(dmabuf) => (
-                    dmabuf.clone(),
+                    Content::Dmabuf(dmabuf.clone()),
                     Held::Client(buffer.clone()),
                     BufferKey::client(buffer),
                 ),
-                Err(_) => match egl.dmabuf(buffer) {
-                    Some(dmabuf) => (
-                        dmabuf,
+                Err(_) => match egl.content(buffer) {
+                    Some(content) => (
+                        content,
                         Held::Client(buffer.clone()),
                         BufferKey::client(buffer),
                     ),
                     None => match staging::stage(stager, states, buffer, &data, &mut built.retired)
                     {
-                        Some(s) => (s.dmabuf, Held::Staged(s.hold), BufferKey::Staged(s.uid)),
+                        Some(s) => (
+                            Content::Dmabuf(s.dmabuf),
+                            Held::Staged(s.hold),
+                            BufferKey::Staged(s.uid),
+                        ),
                         None => {
                             built.skipped += 1;
                             return;
@@ -181,10 +201,20 @@ fn build_tree(
                     },
                 },
             };
-            let transform = data.buffer_transform();
-            let src =
+            let mut transform = data.buffer_transform();
+            let mut src =
                 view.src
                     .to_buffer(data.buffer_scale() as f64, transform, &buffer_size.to_f64());
+            let (y_inverted, height) = match &content {
+                Content::Dmabuf(d) => (d.y_inverted(), d.size().h as f64),
+                Content::Image(i) => (i.y_inverted, i.height as f64),
+            };
+            if y_inverted {
+                // Stored bottom row first: the part shown is mirrored in the
+                // buffer, and the flip is undone on the way to the view.
+                src.loc.y = height - (src.loc.y + src.size.h);
+                transform = after_y_flip(transform);
+            }
             let dst = Rectangle::new(*location + view.offset, view.dst);
             // Opaque when the client says every pixel of the surface is: its
             // opaque region covers the whole of it.
@@ -196,7 +226,7 @@ fn build_tree(
                 layer_id: layer_id(states),
                 held,
                 key,
-                dmabuf,
+                content,
                 src,
                 dst,
                 transform: transform_value(transform),
@@ -212,4 +242,61 @@ fn build_tree(
 pub fn dmabuf_size(dmabuf: &Dmabuf) -> (u32, u32) {
     let size = dmabuf.size();
     (size.w.max(0) as u32, size.h.max(0) as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Where transform @p t sends buffer point (x, y) of a w x h buffer.
+    fn apply(t: Transform, (x, y): (i32, i32), (w, h): (i32, i32)) -> (i32, i32) {
+        // Flip first (mirror across the vertical axis), then rotate
+        // counter-clockwise, per wl_output.transform.
+        let flipped = matches!(
+            t,
+            Transform::Flipped
+                | Transform::Flipped90
+                | Transform::Flipped180
+                | Transform::Flipped270
+        );
+        let (mut x, y) = if flipped { (w - 1 - x, y) } else { (x, y) };
+        let (mut y, mut w, mut h) = (y, w, h);
+        let turns = match t {
+            Transform::Normal | Transform::Flipped => 0,
+            Transform::_90 | Transform::Flipped90 => 1,
+            Transform::_180 | Transform::Flipped180 => 2,
+            Transform::_270 | Transform::Flipped270 => 3,
+        };
+        for _ in 0..turns {
+            (x, y) = (y, w - 1 - x);
+            (w, h) = (h, w);
+        }
+        (x, y)
+    }
+
+    #[test]
+    fn a_y_flip_composes_under_every_transform() {
+        let size = (4, 3);
+        for t in [
+            Transform::Normal,
+            Transform::_90,
+            Transform::_180,
+            Transform::_270,
+            Transform::Flipped,
+            Transform::Flipped90,
+            Transform::Flipped180,
+            Transform::Flipped270,
+        ] {
+            for x in 0..size.0 {
+                for y in 0..size.1 {
+                    let unflipped = (x, size.1 - 1 - y);
+                    assert_eq!(
+                        apply(after_y_flip(t), (x, y), size),
+                        apply(t, unflipped, size),
+                        "{t:?} at {x},{y}"
+                    );
+                }
+            }
+        }
+    }
 }

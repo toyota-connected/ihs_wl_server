@@ -152,7 +152,7 @@ impl State {
             commit_timing_manager_state: CommitTimingManagerState::new::<Self>(&dh),
             syncobj_state: crate::syncobj::device()
                 .map(|device| DrmSyncobjState::new::<Self>(&dh, device)),
-            egl: crate::egl_display::EglBuffers::bind(&dh),
+            egl: crate::egl_display::EglBuffers::bind(&dh, caps),
             data_device_state: DataDeviceState::new::<Self>(&dh),
             seat_state,
             seat,
