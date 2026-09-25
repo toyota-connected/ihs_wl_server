@@ -18,6 +18,10 @@
 //           ihs_wayland_server:
 //             pkg_config_path: /path/to/prefix/lib/pkgconfig
 //
+//   - cargo features the same way, as a list or a comma-separated string:
+//
+//             cargo_features: [egl-wl-display]
+//
 // SKIP_NATIVE_BUILD skips the build (the library comes from elsewhere).
 
 import 'dart:convert';
@@ -55,6 +59,8 @@ void main(List<String> args) async {
           .toFilePath();
     }
 
+    final features = _features(input.userDefines['cargo_features']);
+
     final cargoArgs = [
       'build',
       '--release',
@@ -63,6 +69,7 @@ void main(List<String> args) async {
       '--message-format=json-render-diagnostics',
       '--manifest-path',
       manifest.path,
+      if (features.isNotEmpty) ...['--features', features.join(',')],
       if (!Platform.environment.containsKey('CARGO_BUILD_TARGET')) ...[
         '--target',
         _triple(code.targetArchitecture),
@@ -130,3 +137,30 @@ String _triple(Architecture arch) => switch (arch) {
   Architecture.riscv64 => 'riscv64gc-unknown-linux-gnu',
   _ => throw UnsupportedError('no Rust target for $arch'),
 };
+
+/// The `cargo_features` user-define: a list of names, or one string of
+/// comma-separated names.
+List<String> _features(Object? value) {
+  final names = switch (value) {
+    null => const <String>[],
+    final String s => s.split(','),
+    final List<Object?> l => [for (final e in l) '$e'],
+    _ => throw ArgumentError.value(
+      value,
+      'cargo_features',
+      'a list or a comma-separated string',
+    ),
+  };
+  final valid = RegExp(r'^[A-Za-z0-9_-]+$');
+  return [
+    for (final raw in names)
+      if (raw.trim().isNotEmpty)
+        valid.hasMatch(raw.trim())
+            ? raw.trim()
+            : throw ArgumentError.value(
+                raw,
+                'cargo_features',
+                'not a cargo feature name',
+              ),
+  ];
+}

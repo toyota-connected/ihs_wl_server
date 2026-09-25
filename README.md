@@ -80,7 +80,15 @@ needs a libgbm that can describe such buffers (one exporting `gbm_perform`, as
 libwayland-server, and loads libEGL at run time; there is still no EGL context.
 Some such implementations allocate compressed buffers by default, which can show
 corrupted when imported by the dma-buf alone: have the client's EGL share them
-uncompressed (the server logs a warning when it sees one).
+uncompressed (the server logs a warning when it sees one). An app turns the
+feature on in its pubspec:
+
+```yaml
+hooks:
+  user_defines:
+    ihs_wayland_server:
+      cargo_features: [egl-wl-display]
+```
 
 Not yet implemented:
 
