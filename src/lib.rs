@@ -18,6 +18,7 @@ use std::panic::{self, AssertUnwindSafe};
 mod buffers;
 mod caps;
 mod config;
+mod egl_display;
 mod error;
 #[doc(hidden)]
 pub mod ffi;
@@ -37,6 +38,8 @@ mod syncobj;
 mod thread;
 mod timing;
 mod tree;
+#[cfg(feature = "egl-wl-display")]
+mod vendor_gbm;
 mod view;
 
 pub use config::Config;

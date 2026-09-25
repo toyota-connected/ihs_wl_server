@@ -113,14 +113,18 @@ pub struct Built {
 }
 
 /// The layers of a view's scene, bottom to top.
-pub fn build(trees: &[crate::popups::Tree], stager: &mut Stager) -> Built {
+pub fn build(
+    trees: &[crate::popups::Tree],
+    stager: &mut Stager,
+    egl: &mut crate::egl_display::EglBuffers,
+) -> Built {
     let mut built = Built {
         layers: Vec::new(),
         skipped: 0,
         retired: Vec::new(),
     };
     for (root, start) in trees {
-        build_tree(root, *start, stager, &mut built);
+        build_tree(root, *start, stager, egl, &mut built);
     }
     built
 }
@@ -130,6 +134,7 @@ fn build_tree(
     root: &WlSurface,
     start: Point<i32, Logical>,
     stager: &mut Stager,
+    egl: &mut crate::egl_display::EglBuffers,
     built: &mut Built,
 ) {
     compositor::with_surface_tree_upward(
@@ -160,12 +165,20 @@ fn build_tree(
                     Held::Client(buffer.clone()),
                     BufferKey::client(buffer),
                 ),
-                Err(_) => match staging::stage(stager, states, buffer, &data, &mut built.retired) {
-                    Some(s) => (s.dmabuf, Held::Staged(s.hold), BufferKey::Staged(s.uid)),
-                    None => {
-                        built.skipped += 1;
-                        return;
-                    }
+                Err(_) => match egl.dmabuf(buffer) {
+                    Some(dmabuf) => (
+                        dmabuf,
+                        Held::Client(buffer.clone()),
+                        BufferKey::client(buffer),
+                    ),
+                    None => match staging::stage(stager, states, buffer, &data, &mut built.retired)
+                    {
+                        Some(s) => (s.dmabuf, Held::Staged(s.hold), BufferKey::Staged(s.uid)),
+                        None => {
+                            built.skipped += 1;
+                            return;
+                        }
+                    },
                 },
             };
             let transform = data.buffer_transform();

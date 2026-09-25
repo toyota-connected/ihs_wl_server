@@ -61,6 +61,8 @@ pub struct State {
     pub commit_timing_manager_state: CommitTimingManagerState,
     /// Explicit sync, when a render node can wait on syncobjs.
     pub syncobj_state: Option<DrmSyncobjState>,
+    /// Buffers an EGL implementation shares over its own protocol.
+    pub egl: crate::egl_display::EglBuffers,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
     /// Kept alive for the global's lifetime.
@@ -150,6 +152,7 @@ impl State {
             commit_timing_manager_state: CommitTimingManagerState::new::<Self>(&dh),
             syncobj_state: crate::syncobj::device()
                 .map(|device| DrmSyncobjState::new::<Self>(&dh, device)),
+            egl: crate::egl_display::EglBuffers::bind(&dh),
             data_device_state: DataDeviceState::new::<Self>(&dh),
             seat_state,
             seat,
