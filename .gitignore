@@ -2,3 +2,6 @@
 /dart/ihs_wayland_server/.dart_tool/
 /dart/ihs_wayland_server/build/
 /dart/ihs_wayland_server/pubspec.lock
+/dart/ihs_wayland_server/example/.dart_tool/
+/dart/ihs_wayland_server/example/build/
+/dart/ihs_wayland_server/example/libapp.so.*
