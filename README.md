@@ -102,14 +102,32 @@ client should appear:
 ```dart
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
 
-final server = WaylandServer.start(); // loads libihs_wl_server.so
+final server = WaylandServer.start(); // loads the bundled libihs_wl_server.so
 // Launch clients with WAYLAND_DISPLAY=${server.socketName}.
 
 const WaylandToplevelView(appId: 'org.example.app');
 ```
 
 A view shows the oldest toplevel with a matching app_id that no other view is
-already showing. It stays empty until such a client maps.
+already showing, or with no app_id given, the oldest one at all. It stays empty
+until such a client maps.
+
+The package's build hook builds the crate with cargo as part of the app's
+build and bundles the library, so there is nothing to build by hand. The
+hook runs with a filtered environment: a cross build puts a `cargo` wrapper
+carrying the target, linker and pkg-config settings first on `PATH` (emb does
+this), and `ivi-homescreen-shared.pc` outside the default search path is named
+in the app's pubspec:
+
+```yaml
+hooks:
+  user_defines:
+    ihs_wayland_server:
+      pkg_config_path: /path/to/prefix/lib/pkgconfig
+```
+
+`dart/ihs_wayland_server/example` is a minimal app; its `emb.yaml` builds it
+with emb against ivi-homescreen.
 
 `WaylandServer.start` is idempotent. After a hot restart the server is still
 running. Its clients carry on, and the re-created views bind to their

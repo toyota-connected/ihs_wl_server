@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Toyota Connected North America
+# SPDX-License-Identifier: Apache-2.0
+
+# App layer for building this example with emb against ivi-homescreen:
+#
+#   emb cross <ivi-homescreen>/.emb/raspberry-pi.emb.yaml --target rpi5-trixie \
+#     --build --backend drm-kms-egl -D BUILD_COMPOSITOR=ON --app <this dir>
+#
+# The package's build hook cross-compiles libihs_wl_server.so with cargo (emb
+# puts a cargo wrapper carrying the cross env on the hook's PATH). The crate's
+# build.rs links libihs_shared through ivi-homescreen-shared.pc, so that is
+# built into the overlay from the same shell sources; at runtime the shell's
+# own libihs_shared is used. Shared, never static: there must be one registry.
+id: ihs_wayland_server_example
+type: app
+
+cross:
+  sysroot:
+    dev_packages: [libgbm-dev, libxkbcommon-dev]
+  augment:
+    - pkg: ivi-homescreen-shared
+      min: "1.0.0"
+      url: https://github.com/toyota-connected/ivi-homescreen/archive/d77bd3e479166bbe525bba9fcde2d3570f0a183c.tar.gz
+      subdir: shared
+      build: cmake
+      static: false
+      defines: { ENABLE_DLT: 'OFF' }
+  targets:
+    rpi5-trixie: {}
+    rpi5-bookworm: {}
+    rpi4-trixie: {}
+    rpi4-bookworm: {}

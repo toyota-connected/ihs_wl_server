@@ -14,15 +14,11 @@ const String _viewType = 'ihs_wl/toplevel';
 ///
 /// The toplevel is found by [activationToken] (the token the launcher put in
 /// the client's `XDG_ACTIVATION_TOKEN`), or else by [appId]: the oldest
-/// toplevel with that app_id not already shown elsewhere. Until a matching
-/// client maps, the view is empty.
+/// toplevel with that app_id not already shown elsewhere. With neither, it
+/// is the oldest toplevel not shown elsewhere, whatever its app_id. Until a
+/// matching client maps, the view is empty.
 class WaylandToplevelView extends StatelessWidget {
-  const WaylandToplevelView({
-    super.key,
-    this.activationToken,
-    this.appId,
-  }) : assert(activationToken != null || appId != null,
-            'a view needs an activation token or an app_id to bind by');
+  const WaylandToplevelView({super.key, this.activationToken, this.appId});
 
   final String? activationToken;
   final String? appId;
@@ -34,14 +30,16 @@ class WaylandToplevelView extends StatelessWidget {
       viewType: _viewType,
       surfaceFactory:
           (BuildContext context, PlatformViewController controller) {
-        return PlatformViewSurface(
-          controller: controller,
-          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{
-            Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
+            return PlatformViewSurface(
+              controller: controller,
+              gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{
+                Factory<OneSequenceGestureRecognizer>(
+                  EagerGestureRecognizer.new,
+                ),
+              },
+              hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+            );
           },
-          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
-        );
-      },
       onCreatePlatformView: (PlatformViewCreationParams params) {
         // PlatformViewLink calls create(size:) once laid out, so the view
         // is created at its real size rather than 0x0.
@@ -84,21 +82,22 @@ class _ToplevelViewController extends PlatformViewController {
       _creation ??= _createOnce(size);
 
   Future<void> _createOnce(Size? size) async {
-    final ByteData? params =
-        const StandardMessageCodec().encodeMessage(creationParams);
-    await SystemChannels.platform_views.invokeMethod<void>(
-      'create',
-      <String, Object?>{
-        'id': id,
-        'viewType': _viewType,
-        'direction': 0,
-        'width': size?.width ?? 0.0,
-        'height': size?.height ?? 0.0,
-        if (params != null)
-          'params': params.buffer
-              .asUint8List(params.offsetInBytes, params.lengthInBytes),
-      },
+    final ByteData? params = const StandardMessageCodec().encodeMessage(
+      creationParams,
     );
+    await SystemChannels.platform_views
+        .invokeMethod<void>('create', <String, Object?>{
+          'id': id,
+          'viewType': _viewType,
+          'direction': 0,
+          'width': size?.width ?? 0.0,
+          'height': size?.height ?? 0.0,
+          if (params != null)
+            'params': params.buffer.asUint8List(
+              params.offsetInBytes,
+              params.lengthInBytes,
+            ),
+        });
     _created = true;
     onCreated(id);
   }
@@ -116,7 +115,9 @@ class _ToplevelViewController extends PlatformViewController {
     if (!_created) {
       return;
     }
-    await SystemChannels.platform_views
-        .invokeMethod<void>('dispose', <String, Object>{'id': id});
+    await SystemChannels.platform_views.invokeMethod<void>(
+      'dispose',
+      <String, Object>{'id': id},
+    );
   }
 }

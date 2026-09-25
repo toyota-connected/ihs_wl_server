@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Toyota Connected North America
+# SPDX-License-Identifier: Apache-2.0
+
+name: ihs_wayland_server_example
+description: Shows a Wayland client inside an ivi-homescreen platform view.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ihs_wayland_server:
+    path: ../
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

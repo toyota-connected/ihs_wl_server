@@ -6,6 +6,7 @@ import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 
 import 'bindings.g.dart';
+import 'loader.dart';
 
 /// A failed call into libihs_wl_server.
 class WaylandServerException implements Exception {
@@ -36,13 +37,16 @@ class WaylandServer {
   /// the server is already running, and this returns a handle to it.
   ///
   /// [socketName] defaults to `wayland-ihs-N` when the shell is itself a
-  /// Wayland client, else `wayland-N`.
-  static WaylandServer start({
-    String? socketName,
-    String libraryPath = 'libihs_wl_server.so',
-  }) {
-    final WaylandServer server = _instance ??=
-        WaylandServer._(IhsWlBindings(ffi.DynamicLibrary.open(libraryPath)));
+  /// Wayland client, else `wayland-N`. [libraryPath] overrides where the
+  /// module is loaded from; by default it is the one the build hook bundled.
+  static WaylandServer start({String? socketName, String? libraryPath}) {
+    final WaylandServer server = _instance ??= WaylandServer._(
+      IhsWlBindings(
+        libraryPath == null
+            ? loadIhsWl()
+            : ffi.DynamicLibrary.open(libraryPath),
+      ),
+    );
     server._start(socketName);
     return server;
   }
@@ -72,8 +76,8 @@ class WaylandServer {
   void stop() => _lib.ihs_wl_stop();
 
   WaylandServerException _error(String call, int rc) => WaylandServerException(
-        call,
-        rc,
-        _lib.ihs_wl_last_error().cast<Utf8>().toDartString(),
-      );
+    call,
+    rc,
+    _lib.ihs_wl_last_error().cast<Utf8>().toDartString(),
+  );
 }
