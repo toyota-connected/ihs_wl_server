@@ -96,6 +96,10 @@ impl EglBuffers {
         if let Some((_, content, _)) = self.cache.get(&buffer.id()) {
             return Some(content.clone());
         }
+        // Shared memory is staged elsewhere, and is nothing EGL made.
+        if smithay::wayland::shm::with_buffer_contents(buffer, |_, _, _| ()).is_ok() {
+            return None;
+        }
         #[cfg(feature = "egl-wl-display")]
         {
             let (content, keep) = match self.mode.as_mut()? {
@@ -199,7 +203,7 @@ mod bound {
 
     pub struct Bound {
         // Dropped in this order: the reader unbinds before the display goes.
-        _reader: EGLBufferReader,
+        reader: EGLBufferReader,
         _display: EGLDisplay,
         gbm: VendorGbm,
         warned_compressed: bool,
@@ -222,7 +226,7 @@ mod bound {
                 .ok()?;
             tracing::info!(?path, "EGL display bound to the Wayland display");
             Some(Bound {
-                _reader: reader,
+                reader,
                 _display: display,
                 gbm,
                 warned_compressed: false,
@@ -230,6 +234,10 @@ mod bound {
         }
 
         pub fn import(&mut self, buffer: &WlBuffer) -> Option<Dmabuf> {
+            // Only a buffer the EGL implementation made: libgbm reads any
+            // other wl_buffer's data as its own, gets garbage, and can
+            // crash the process.
+            self.reader.egl_buffer_dimensions(buffer)?;
             let ptr = buffer.id().as_ptr();
             if ptr.is_null() {
                 return None;
