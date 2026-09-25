@@ -99,6 +99,12 @@ pub struct SubmittedLayer {
     pub fourcc: u32,
     pub modifier: u64,
     pub plane_count: u32,
+    /// Plane 0's.
+    pub stride: u32,
+    /// Every plane's (offset, stride), in order.
+    pub planes: Vec<(u32, u32)>,
+    /// Every plane came on the same fd.
+    pub one_fd: bool,
     /// 16.16
     pub src: (i32, i32, u32, u32),
     pub dst: (i32, i32, u32, u32),
@@ -262,6 +268,11 @@ unsafe extern "C" fn submit_layers(
             fourcc: f.format.fourcc,
             modifier: f.format.modifier,
             plane_count: f.plane_count,
+            stride: f.plane_stride[0],
+            planes: (0..f.plane_count.min(4) as usize)
+                .map(|i| (f.plane_offset[i], f.plane_stride[i]))
+                .collect(),
+            one_fd: (0..f.plane_count.min(4) as usize).all(|i| f.plane_fd[i] == f.plane_fd[0]),
             src: (l.src_x, l.src_y, l.src_w, l.src_h),
             dst: (l.dst_x, l.dst_y, l.dst_w, l.dst_h),
             transform: l.transform,

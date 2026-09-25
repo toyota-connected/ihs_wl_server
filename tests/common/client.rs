@@ -85,6 +85,9 @@ struct App {
     /// The popup's last xdg_popup.configure: x, y, width, height.
     popup_geometry: Option<(i32, i32, i32, i32)>,
     popup_done: bool,
+    gbm_backend: Option<super::gbm_client::gbm_buffer_backend::GbmBufferBackend>,
+    /// The last gbm_buffer_params outcome: the buffer, or None for failed.
+    gbm_outcome: Option<Option<wl_buffer::WlBuffer>>,
 }
 
 /// A seat event, with the surface it names as its protocol id.
@@ -532,6 +535,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.timing_manager = Some(registry.bind(name, 1, qh, ()))
                 }
                 "wl_seat" => app.seat = Some(registry.bind(name, version.min(9), qh, ())),
+                "gbm_buffer_backend" => app.gbm_backend = Some(registry.bind(name, 1, qh, ())),
                 "wp_fractional_scale_manager_v1" => {
                     app.fractional_manager = Some(registry.bind(name, 1, qh, ()))
                 }
@@ -1229,4 +1233,93 @@ impl Dispatch<xdg_popup::XdgPopup, ()> for App {
             _ => {}
         }
     }
+}
+
+use super::gbm_client::{gbm_buffer_backend, gbm_buffer_params};
+
+/// The udata of a wl_buffer gbm_buffer_params created.
+pub struct GbmCreated;
+
+impl Client {
+    /// Share a @p width x @p height buffer of DRM @p format over
+    /// gbm_buffer_backend, its metadata fd holding @p metadata. Returns its
+    /// index, or None when the server said failed.
+    pub fn gbm_buffer(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: u32,
+        flags: i32,
+        metadata: &[u8],
+    ) -> Option<usize> {
+        let qh = self.queue.handle();
+        let backend = self
+            .app
+            .gbm_backend
+            .as_ref()
+            .expect("no gbm_buffer_backend");
+        let params = backend.create_params(&qh, ());
+        let file = memfd((width * height * 4) as usize);
+        let meta = memfd(metadata.len().max(1));
+        std::os::unix::fs::FileExt::write_all_at(&meta, metadata, 0).unwrap();
+        self.app.gbm_outcome = None;
+        params.create(file.as_fd(), meta.as_fd(), width, height, format, flags);
+        self.dispatch_until("gbm_buffer_params outcome", |c| c.app.gbm_outcome.is_some());
+        params.destroy();
+        let buffer = self.app.gbm_outcome.take().unwrap()?;
+        self.buffers.push(Some((buffer, file)));
+        Some(self.buffers.len() - 1)
+    }
+
+    /// Ask a used gbm_buffer_params for a second buffer; true when refused.
+    pub fn gbm_params_reused_fails(&mut self) -> bool {
+        let qh = self.queue.handle();
+        let backend = self
+            .app
+            .gbm_backend
+            .as_ref()
+            .expect("no gbm_buffer_backend");
+        let params = backend.create_params(&qh, ());
+        let file = memfd(64 * 4);
+        for _ in 0..2 {
+            self.app.gbm_outcome = None;
+            params.create(file.as_fd(), file.as_fd(), 8, 8, XRGB8888, 0);
+            self.dispatch_until("gbm_buffer_params outcome", |c| c.app.gbm_outcome.is_some());
+        }
+        params.destroy();
+        matches!(self.app.gbm_outcome, Some(None))
+    }
+}
+
+delegate_noop!(App: ignore gbm_buffer_backend::GbmBufferBackend);
+impl Dispatch<wl_buffer::WlBuffer, GbmCreated> for App {
+    fn event(
+        _: &mut Self,
+        _: &wl_buffer::WlBuffer,
+        _: wl_buffer::Event,
+        _: &GbmCreated,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<gbm_buffer_params::GbmBufferParams, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &gbm_buffer_params::GbmBufferParams,
+        event: gbm_buffer_params::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            gbm_buffer_params::Event::Created { buffer } => app.gbm_outcome = Some(Some(buffer)),
+            gbm_buffer_params::Event::Failed => app.gbm_outcome = Some(None),
+        }
+    }
+
+    wayland_client::event_created_child!(App, gbm_buffer_params::GbmBufferParams, [
+        gbm_buffer_params::EVT_CREATED_OPCODE => (wl_buffer::WlBuffer, GbmCreated),
+    ]);
 }

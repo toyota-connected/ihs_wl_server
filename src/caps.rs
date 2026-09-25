@@ -31,6 +31,7 @@ fn fallback() -> Vec<FormatModifier> {
 }
 
 /// What the shell reports.
+#[derive(Clone)]
 pub struct Caps {
     /// Importable formats, in the shell's order of preference.
     pub formats: Vec<FormatModifier>,
@@ -100,4 +101,13 @@ fn import_formats(rc: i32, caps: &sys::IhsPvCapabilities) -> Vec<FormatModifier>
         }
     }
     out
+}
+
+impl Caps {
+    /// The shell lists @p fourcc with @p modifier as importable.
+    pub fn accepts(&self, fourcc: u32, modifier: u64) -> bool {
+        self.formats
+            .iter()
+            .any(|f| f.fourcc == fourcc && f.modifier == modifier)
+    }
 }

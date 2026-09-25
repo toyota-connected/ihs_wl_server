@@ -22,6 +22,8 @@ mod egl_display;
 mod error;
 #[doc(hidden)]
 pub mod ffi;
+#[doc(hidden)]
+pub mod gbm_buffer;
 mod handlers;
 mod input;
 mod log;
@@ -38,7 +40,6 @@ mod syncobj;
 mod thread;
 mod timing;
 mod tree;
-#[cfg(feature = "egl-wl-display")]
 mod vendor_gbm;
 mod view;
 

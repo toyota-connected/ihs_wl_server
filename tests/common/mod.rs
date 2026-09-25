@@ -5,6 +5,7 @@
 
 pub mod client;
 pub mod drm;
+pub mod gbm_client;
 pub mod harness;
 pub mod mock_host;
 

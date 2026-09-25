@@ -10,9 +10,10 @@
 //! not.
 
 use std::ffi::{c_int, c_void};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 
 /// A buffer's only plane.
+#[cfg(feature = "egl-wl-display")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub width: u32,
@@ -25,6 +26,11 @@ pub struct Layout {
 
 // From CodeLinaro libgbm's gbm_priv.h and gbm.h.
 const GBM_PERFORM_GET_UBWC_STATUS: c_int = 0x19;
+const GBM_PERFORM_GET_PLANE_INFO: c_int = 0x29;
+const GBM_BO_IMPORT_GBM_BUF_TYPE: u32 = 0x4FFF;
+/// gbm_priv.h MAX_NUM_OF_PLANES.
+const MAX_NUM_OF_PLANES: usize = 5;
+#[cfg(feature = "egl-wl-display")]
 const GBM_BO_IMPORT_WL_BUFFER: u32 = 0x5501;
 const GBM_BO_USE_RENDERING: u32 = 1 << 2;
 /// drm_fourcc.h DRM_FORMAT_MOD_QCOM_COMPRESSED.
@@ -32,6 +38,58 @@ pub const DRM_FORMAT_MOD_QCOM_COMPRESSED: u64 = (0x05 << 56) | 1;
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
 type Perform = unsafe extern "C" fn(operation: c_int, ...) -> c_int;
+
+/// gbm_priv.h struct gbm_buf_info.
+#[repr(C)]
+struct GbmBufInfo {
+    fd: c_int,
+    metadata_fd: c_int,
+    width: u32,
+    height: u32,
+    format: u32,
+}
+
+/// gbm_priv.h generic_plane_t.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct GenericPlane {
+    top_left: usize,
+    offset: u32,
+    component_id: i32,
+    aligned_width: u32,
+    aligned_height: u32,
+    size: u32,
+    bits_per_component: i32,
+    bits_used: i32,
+    h_increment: i32,
+    v_increment: i32,
+    h_subsampling: i32,
+    v_subsampling: i32,
+    stride: u32,
+}
+
+/// gbm_priv.h generic_buf_layout_t.
+#[repr(C)]
+#[derive(Default)]
+struct GenericBufLayout {
+    pixel_format: c_int,
+    num_planes: u32,
+    planes: [GenericPlane; MAX_NUM_OF_PLANES],
+}
+
+/// One plane of a buffer, within its one dma-buf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Plane {
+    pub offset: u32,
+    pub stride: u32,
+}
+
+/// A buffer's planes, and the modifier its metadata implies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Planes {
+    pub modifier: u64,
+    pub planes: Vec<Plane>,
+}
 
 /// The loaded libgbm, on a render node of its own.
 pub struct VendorGbm {
@@ -43,6 +101,7 @@ pub struct VendorGbm {
 // SAFETY: only used from the compositor thread; the device pointer never
 // leaves this struct.
 unsafe impl Send for VendorGbm {}
+unsafe impl Sync for VendorGbm {}
 
 impl VendorGbm {
     /// The loaded libgbm, when it has the vendor extensions.
@@ -69,6 +128,7 @@ impl VendorGbm {
         None
     }
 
+    #[cfg(feature = "egl-wl-display")]
     /// The dma-buf behind a wl_buffer the EGL implementation created, and
     /// its layout.
     ///
@@ -93,7 +153,7 @@ impl VendorGbm {
         let raw = gbm_sys::gbm_bo_get_fd(bo);
         let fd = if raw >= 0 {
             let dup = libc::fcntl(raw, libc::F_DUPFD_CLOEXEC, 0);
-            (dup >= 0).then(|| OwnedFd::from_raw_fd(dup))
+            (dup >= 0).then(|| <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(dup))
         } else {
             None
         };
@@ -117,6 +177,101 @@ impl VendorGbm {
             return Err(format!("layout: rc {rc}, stride {}", layout.stride));
         }
         Ok((fd, layout))
+    }
+}
+
+impl VendorGbm {
+    /// The layout of a buffer shared as an fd and a metadata fd
+    /// (gbm_buffer_backend): every plane, from the metadata.
+    pub fn import_gbm_buf(
+        &self,
+        fd: &OwnedFd,
+        metadata: OwnedFd,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> Result<Planes, String> {
+        // The bo owns what it imports and closes it when destroyed: give it a
+        // dup, and the metadata fd, which nothing else needs.
+        let dup = fd.try_clone().map_err(|e| format!("dup: {e}"))?;
+        let mut info = GbmBufInfo {
+            fd: std::os::fd::IntoRawFd::into_raw_fd(dup),
+            metadata_fd: std::os::fd::IntoRawFd::into_raw_fd(metadata),
+            width,
+            height,
+            format,
+        };
+        // SAFETY: info matches gbm_buf_info and lives across the call.
+        let bo = unsafe {
+            gbm_sys::gbm_bo_import(
+                self.device,
+                GBM_BO_IMPORT_GBM_BUF_TYPE,
+                &mut info as *mut GbmBufInfo as *mut c_void,
+                GBM_BO_USE_RENDERING,
+            )
+        };
+        if bo.is_null() {
+            // SAFETY: not taken over by a bo, so still ours.
+            unsafe {
+                libc::close(info.fd);
+                libc::close(info.metadata_fd);
+            }
+            return Err("gbm_bo_import(gbm_buf_info) failed".into());
+        }
+        let mut ubwc: c_int = 0;
+        let mut layout = GenericBufLayout::default();
+        // SAFETY: bo is live until destroyed below.
+        let (rc, info_rc, stride, offset) = unsafe {
+            let rc = (self.perform)(GBM_PERFORM_GET_UBWC_STATUS, bo, &mut ubwc as *mut c_int);
+            let info_rc = (self.perform)(
+                GBM_PERFORM_GET_PLANE_INFO,
+                bo,
+                &mut layout as *mut GenericBufLayout,
+            );
+            let stride = gbm_sys::gbm_bo_get_stride(bo);
+            let offset = gbm_sys::gbm_bo_get_offset(bo, 0);
+            gbm_sys::gbm_bo_destroy(bo);
+            (rc, info_rc, stride, offset)
+        };
+        if rc != 0 {
+            return Err(format!("UBWC status: {rc}"));
+        }
+        let n = layout.num_planes as usize;
+        let planes = if info_rc == 0 && (1..=MAX_NUM_OF_PLANES).contains(&n) {
+            for (i, p) in layout.planes[..n].iter().enumerate() {
+                tracing::debug!(
+                    i,
+                    offset = p.offset,
+                    stride = p.stride,
+                    v_increment = p.v_increment,
+                    aligned_width = p.aligned_width,
+                    aligned_height = p.aligned_height,
+                    size = p.size,
+                    "gbm buffer plane"
+                );
+            }
+            // The row pitch, as upstream weston takes it.
+            layout.planes[..n]
+                .iter()
+                .map(|p| Plane {
+                    offset: p.offset,
+                    stride: p.v_increment.max(0) as u32,
+                })
+                .collect()
+        } else {
+            vec![Plane { offset, stride }]
+        };
+        if planes.iter().any(|p| p.stride == 0) {
+            return Err("no stride".into());
+        }
+        Ok(Planes {
+            modifier: if ubwc != 0 {
+                DRM_FORMAT_MOD_QCOM_COMPRESSED
+            } else {
+                DRM_FORMAT_MOD_LINEAR
+            },
+            planes,
+        })
     }
 }
 
