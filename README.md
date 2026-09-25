@@ -26,8 +26,15 @@ Early development. Working today:
 - A view binds to a toplevel by app_id and configures it to the view's size.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
   buffer transforms and opaque regions) reaches the shell as one layer per
-  dma-buf surface, bottom to top. Each layer keeps a stable id, so it keeps
-  its display plane while the tree changes.
+  surface, bottom to top. Each layer keeps a stable id, so it keeps its
+  display plane while the tree changes.
+- `wl_shm` surfaces (ARGB8888 and XRGB8888) are copied into linear dma-bufs
+  the server owns; only what changed since a staging buffer was last filled
+  is copied. They come from a contiguous (CMA) dma-heap when there is one, so
+  a display that scans out only contiguous memory (the Raspberry Pi 5) can
+  put them on a plane, else from gbm on a render node.
+  `IHS_WL_STAGING_HEAP` names a heap under `/dev/dma_heap`;
+  `IHS_WL_STAGING_DEVICE` names a render node and forces gbm.
 - Commits are held until their dma-bufs are ready, so the shell never needs
   an acquire fence. With explicit sync the commit's acquire point decides;
   otherwise the buffer's implicit fence does. A buffer's release point is
@@ -46,8 +53,6 @@ Not yet implemented:
 
 - Input: pointer, touch and keyboard.
 - Binding a view to its toplevel by activation token.
-- `wl_shm` buffers as layers. The global is advertised, but shared-memory
-  surfaces are skipped for now.
 - dma-buf feedback and fractional scale.
 
 The C entry points for input and activation tokens exist. For now they return

@@ -245,13 +245,29 @@ impl Client {
         self.roundtrip();
     }
 
-    /// Attach a fresh @p width x @p height ARGB shm buffer to the toplevel and
-    /// commit.
-    pub fn commit_shm_buffer(&mut self, width: i32, height: i32) {
+    /// Attach a fresh @p width x @p height ARGB shm buffer, every pixel
+    /// @p argb, to the toplevel and commit.
+    pub fn commit_shm_buffer(&mut self, width: i32, height: i32, argb: u32) {
+        self.commit_shm_damaged(width, height, argb, (0, 0, width, height));
+    }
+
+    /// commit_shm_buffer, damaging only @p damage (x, y, w, h).
+    pub fn commit_shm_damaged(
+        &mut self,
+        width: i32,
+        height: i32,
+        argb: u32,
+        damage: (i32, i32, i32, i32),
+    ) {
+        use std::io::Write;
         let qh = self.queue.handle();
         let stride = width * 4;
         let size = (stride * height) as usize;
-        let file = memfd(size);
+        let mut file = memfd(size);
+        let pixels: Vec<u8> = std::iter::repeat_n(argb.to_le_bytes(), (width * height) as usize)
+            .flatten()
+            .collect();
+        file.write_all(&pixels).unwrap();
         let pool = self
             .app
             .shm
@@ -262,7 +278,21 @@ impl Client {
             pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, &qh, ());
         let surface = self._surface.as_ref().unwrap();
         surface.attach(Some(&buffer), 0, 0);
-        surface.damage_buffer(0, 0, width, height);
+        surface.damage_buffer(damage.0, damage.1, damage.2, damage.3);
+        surface.commit();
+        self.roundtrip();
+    }
+
+    /// Commit the toplevel with nothing new attached.
+    pub fn commit_no_attach(&mut self) {
+        self._surface.as_ref().unwrap().commit();
+        self.roundtrip();
+    }
+
+    /// Remove the toplevel's buffer and commit.
+    pub fn commit_no_buffer(&mut self) {
+        let surface = self._surface.as_ref().unwrap();
+        surface.attach(None, 0, 0);
         surface.commit();
         self.roundtrip();
     }

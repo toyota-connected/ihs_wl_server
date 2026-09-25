@@ -23,10 +23,12 @@ mod error;
 pub mod ffi;
 mod handlers;
 mod log;
+mod nodes;
 #[doc(hidden)]
 pub mod observe;
 mod pacing;
 mod params;
+mod staging;
 mod state;
 mod submit;
 mod syncobj;

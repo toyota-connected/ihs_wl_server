@@ -97,12 +97,15 @@ pub struct SubmittedLayer {
     pub width: u32,
     pub height: u32,
     pub fourcc: u32,
+    pub modifier: u64,
     pub plane_count: u32,
     /// 16.16
     pub src: (i32, i32, u32, u32),
     pub dst: (i32, i32, u32, u32),
     pub transform: u32,
     pub opaque: bool,
+    /// The pixel at the probe point (set_probe), read from the buffer.
+    pub probe: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -124,6 +127,8 @@ struct Registry {
     fenced: bool,
     /// Our side of the eventfds handed out: (buffer_id, fd).
     fences: Vec<(u32, OwnedFd)>,
+    /// Read the pixel at (x, y) of each submitted buffer.
+    probe: Option<(u32, u32)>,
 }
 
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
@@ -188,6 +193,37 @@ fn view_id_of(view: *mut sys::IhsPlatformView) -> i32 {
 }
 
 /// Close every plane fd of @p frame once, as the registry does.
+/// The 32-bit pixel at (@p x, @p y) of @p frame's first plane, when it is a
+/// mappable dma-buf (a real one, not the tests' memfds -- those map too).
+unsafe fn read_pixel(frame: &sys::IhsFrame, x: u32, y: u32) -> Option<u32> {
+    if frame.plane_count == 0 || x >= frame.width || y >= frame.height {
+        return None;
+    }
+    let fd = frame.plane_fd[0];
+    let off = frame.plane_offset[0] as usize + y as usize * frame.plane_stride[0] as usize;
+    let len = off + (x as usize + 1) * 4;
+    let ptr = libc::mmap(
+        std::ptr::null_mut(),
+        len,
+        libc::PROT_READ,
+        libc::MAP_SHARED,
+        fd,
+        0,
+    );
+    if ptr == libc::MAP_FAILED {
+        return None;
+    }
+    // Wait for writes still in flight, as a consumer honoring the buffer's
+    // implicit fence would (a gbm map may write back through the GPU).
+    const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+    let sync = |flags: u64| libc::ioctl(fd, DMA_BUF_IOCTL_SYNC, &flags);
+    sync(1); // START | READ
+    let px = std::ptr::read_unaligned((ptr as *const u8).add(off + x as usize * 4) as *const u32);
+    sync(1 | 4); // END | READ
+    libc::munmap(ptr, len);
+    Some(px)
+}
+
 unsafe fn consume_frame(frame: &sys::IhsFrame) {
     let n = (frame.plane_count as usize).min(4);
     for i in 0..n {
@@ -221,11 +257,13 @@ unsafe extern "C" fn submit_layers(
             width: f.width,
             height: f.height,
             fourcc: f.format.fourcc,
+            modifier: f.format.modifier,
             plane_count: f.plane_count,
             src: (l.src_x, l.src_y, l.src_w, l.src_h),
             dst: (l.dst_x, l.dst_y, l.dst_w, l.dst_h),
             transform: l.transform,
             opaque: l.opaque != 0,
+            probe: with(|r| r.probe).and_then(|(x, y)| read_pixel(f, x, y)),
         });
         consume_frame(f);
         if l.acquire_fence_fd >= 0 {
@@ -386,6 +424,11 @@ pub fn dispose_view(id: i32) {
     if let Some(dispose) = view.callbacks.dispose {
         unsafe { dispose(view.user_data as *mut c_void) };
     }
+}
+
+/// Read the pixel at (@p x, @p y) of every buffer submitted from now on.
+pub fn set_probe(at: Option<(u32, u32)>) {
+    with(|r| r.probe = at);
 }
 
 /// Hand back an eventfd per layer as its release fence from now on.
