@@ -372,8 +372,8 @@ fn a_view_is_cleared_when_its_toplevel_goes() {
     mock_host::dispose_view(12);
 }
 
-/// A toplevel with nothing the shell can show -- only shared memory, for now
-/// -- clears its view once, not on every commit.
+/// A toplevel with nothing the shell can show -- its buffer removed -- clears
+/// its view once, not on every commit.
 #[test]
 fn a_view_with_nothing_to_show_is_cleared_once() {
     let _serial = serial();
@@ -384,8 +384,8 @@ fn a_view_with_nothing_to_show_is_cleared_once() {
     h.bind(13, "org.example.j", 16.0, 16.0);
     h.wait_submissions(13, 1);
 
-    h.client.commit_shm_buffer(16, 16);
-    h.client.commit_shm_buffer(16, 16);
+    h.client.commit_no_buffer();
+    h.client.commit_no_buffer();
     let subs = h.wait_submissions(13, 2);
     h.client.roundtrip();
     let subs_after = Harness::submissions(13);

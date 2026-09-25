@@ -3,13 +3,15 @@
 
 //! A toplevel's committed surface tree, as the layer list the shell draws.
 //!
-//! Every surface with a dma-buf attached becomes one layer, bottom to top in
+//! Every surface with a buffer attached becomes one layer, bottom to top in
 //! the stacking order the client asked for: the buffer, the part of it shown
 //! (the viewport source, in the buffer's own pixels), where it lands in the
 //! view, and its orientation. The shell treats each exactly like a Flutter
-//! layer, compositing it or putting it on a plane of its own.
+//! layer, compositing it or putting it on a plane of its own. A shared-memory
+//! buffer goes as the staging slot it is copied into (staging.rs).
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::Buffer as _;
@@ -20,14 +22,37 @@ use smithay::wayland::compositor::{self, TraversalAction};
 use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
+use crate::buffers::BufferKey;
+use crate::staging::{self, Stager};
+
+/// What keeps a layer's buffer from the client until the shell is done.
+#[derive(Clone)]
+pub enum Held {
+    /// The client's own buffer: the last clone dropped releases it.
+    Client(Buffer),
+    /// A staging slot: busy while a clone lives.
+    Staged(Arc<()>),
+}
+
+impl PartialEq for Held {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Held::Client(a), Held::Client(b)) => **a == **b,
+            (Held::Staged(a), Held::Staged(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 /// One layer of a view, before the buffer ids and fds are filled in.
 pub struct LayerSpec {
     /// Stable for the surface's life, so a layer keeps its plane while the
     /// tree around it changes.
     pub layer_id: u32,
-    /// Held until the shell is done with it; the last clone dropped releases
-    /// the buffer to the client.
-    pub buffer: Buffer,
+    /// Held until the shell is done with it.
+    pub held: Held,
+    /// What its buffer id is keyed by.
+    pub key: BufferKey,
     pub dmabuf: Dmabuf,
     /// The part of the buffer shown, in its own pixels, before `transform`.
     pub src: Rectangle<f64, smithay::utils::Buffer>,
@@ -78,19 +103,22 @@ fn geometry_origin(root: &WlSurface) -> Point<i32, Logical> {
     })
 }
 
-/// How many surfaces of the tree have a buffer that is not a dma-buf. They
-/// are left out of the layers (shared-memory buffers are not handled yet).
+/// The layers, how many surfaces had a buffer that could not be shown (a
+/// shared-memory format other than ARGB/XRGB8888, or nothing to stage it
+/// with), and the staging slots dropped, whose buffer ids are to retire.
 pub struct Built {
     pub layers: Vec<LayerSpec>,
-    pub skipped_non_dmabuf: usize,
+    pub skipped: usize,
+    pub retired: Vec<u64>,
 }
 
 /// The layers of the tree rooted at @p root, bottom to top.
-pub fn build(root: &WlSurface) -> Built {
+pub fn build(root: &WlSurface, stager: &mut Stager) -> Built {
     let origin = geometry_origin(root);
     let mut built = Built {
         layers: Vec::new(),
-        skipped_non_dmabuf: 0,
+        skipped: 0,
+        retired: Vec::new(),
     };
     let start: Point<i32, Logical> = (-origin.x, -origin.y).into();
     compositor::with_surface_tree_upward(
@@ -115,9 +143,19 @@ pub fn build(root: &WlSurface) -> Built {
             else {
                 return;
             };
-            let Ok(dmabuf) = get_dmabuf(buffer) else {
-                built.skipped_non_dmabuf += 1;
-                return;
+            let (dmabuf, held, key) = match get_dmabuf(buffer) {
+                Ok(dmabuf) => (
+                    dmabuf.clone(),
+                    Held::Client(buffer.clone()),
+                    BufferKey::client(buffer),
+                ),
+                Err(_) => match staging::stage(stager, states, buffer, &data, &mut built.retired) {
+                    Some(s) => (s.dmabuf, Held::Staged(s.hold), BufferKey::Staged(s.uid)),
+                    None => {
+                        built.skipped += 1;
+                        return;
+                    }
+                },
             };
             let transform = data.buffer_transform();
             let src =
@@ -132,8 +170,9 @@ pub fn build(root: &WlSurface) -> Built {
                 .is_some_and(|r| r.iter().any(|o| o.contains_rect(whole)));
             built.layers.push(LayerSpec {
                 layer_id: layer_id(states),
-                buffer: buffer.clone(),
-                dmabuf: dmabuf.clone(),
+                held,
+                key,
+                dmabuf,
                 src,
                 dst,
                 transform: transform_value(transform),

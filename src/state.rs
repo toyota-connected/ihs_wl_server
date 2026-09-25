@@ -73,6 +73,8 @@ pub struct State {
     /// Live platform views, by Flutter view id.
     pub views: HashMap<i32, ViewEntry>,
     pub buffers: BufferIds,
+    /// Stages shared-memory surfaces into dma-bufs.
+    pub stager: crate::staging::Stager,
     clients: Arc<AtomicU32>,
 
     /// The display's refresh cycle, from the shell's last report.
@@ -147,6 +149,7 @@ impl State {
             toplevels: Toplevels::default(),
             views: HashMap::new(),
             buffers: BufferIds::default(),
+            stager: crate::staging::Stager::default(),
             clients: Arc::new(AtomicU32::new(0)),
             clock: FrameClock::default(),
             timed: Vec::new(),

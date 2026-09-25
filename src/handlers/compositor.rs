@@ -34,6 +34,13 @@ impl CompositorHandler for State {
             state.gate_on_readiness(surface);
             state.watch_target(surface);
         });
+        // Its staging slots go with it; the views drop their imports.
+        compositor::add_destruction_hook::<Self, _>(surface, |state, surface| {
+            let retired = compositor::with_states(surface, crate::staging::drop_ring);
+            for uid in retired {
+                state.retire_key(&crate::buffers::BufferKey::Staged(uid));
+            }
+        });
     }
 
     fn commit(&mut self, surface: &WlSurface) {

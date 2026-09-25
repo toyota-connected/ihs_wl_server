@@ -18,18 +18,18 @@ use std::collections::HashMap;
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 
 use smithay::backend::allocator::Buffer as _;
-use smithay::backend::renderer::utils::Buffer;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::{self, SurfaceAttributes, TraversalAction};
 
+use crate::buffers::BufferKey;
 use crate::ffi::ihs::sys;
 use crate::observe::{self, Observed};
 use crate::state::State;
 use crate::timing::Taken;
-use crate::tree::{self, LayerSpec};
+use crate::tree::{self, Held, LayerSpec};
 
 /// Buffers held without a fence, per view, before the oldest goes back.
 const MAX_UNFENCED: usize = 64;
@@ -39,10 +39,10 @@ const MAX_UNFENCED: usize = 64;
 pub struct Holds {
     next_key: u64,
     /// Held until their release fence signals.
-    fenced: HashMap<u64, (Buffer, RegistrationToken)>,
+    fenced: HashMap<u64, (Held, RegistrationToken)>,
     /// Held until a frame after the one that carried them is shown: (seq of
     /// that frame, buffer).
-    unfenced: Vec<(u64, Buffer)>,
+    unfenced: Vec<(u64, Held)>,
 }
 
 impl Holds {
@@ -51,7 +51,7 @@ impl Holds {
         &mut self,
         handle: &LoopHandle<'static, State>,
         view_id: i32,
-        buffer: Buffer,
+        buffer: Held,
         fence: OwnedFd,
     ) {
         self.next_key += 1;
@@ -74,12 +74,12 @@ impl Holds {
         }
     }
 
-    fn hold_unfenced(&mut self, seq: u64, buffer: Buffer) {
+    fn hold_unfenced(&mut self, seq: u64, buffer: Held) {
         // A buffer submitted again is held for the later frame only. Without
         // this, a client that commits without waiting for frame callbacks
         // while its view is hidden -- so nothing is ever presented -- would
         // grow the list without bound.
-        self.unfenced.retain(|(_, held)| **held != *buffer);
+        self.unfenced.retain(|(_, held)| *held != buffer);
         self.unfenced.push((seq, buffer));
         // And a hard bound, for one that cycles through fresh buffers: give
         // the oldest back. A shell that has not presented anything in this
@@ -218,13 +218,12 @@ impl State {
     /// Submit the layers of the tree at @p root; the seq it went as, and the
     /// (layer id, content generation) of each layer.
     fn submit_tree(&mut self, view_id: i32, root: &WlSurface) -> Option<(u64, Vec<(u32, u64)>)> {
-        let built = tree::build(root);
-        if built.skipped_non_dmabuf > 0 {
-            tracing::debug!(
-                view_id,
-                n = built.skipped_non_dmabuf,
-                "shared-memory surfaces are not shown yet"
-            );
+        let built = tree::build(root, &mut self.stager);
+        for uid in &built.retired {
+            self.retire_key(&BufferKey::Staged(*uid));
+        }
+        if built.skipped > 0 {
+            tracing::debug!(view_id, n = built.skipped, "surfaces with nothing to show");
         }
         if built.layers.is_empty() {
             // Nothing the shell can show (only shared-memory surfaces, say):
@@ -248,7 +247,7 @@ impl State {
 
         let mut frames: Vec<sys::IhsFrame> = Vec::with_capacity(specs.len());
         for spec in &specs {
-            let id = self.buffers.id_for(&spec.buffer, view_id);
+            let id = self.buffers.id_for(&spec.key, view_id);
             match frame_for(spec, id) {
                 Some(frame) => frames.push(frame),
                 None => {
@@ -306,9 +305,9 @@ impl State {
                 let fence = unsafe { OwnedFd::from_raw_fd(fd) };
                 entry
                     .holds
-                    .hold_fenced(&self.loop_handle, view_id, spec.buffer, fence);
+                    .hold_fenced(&self.loop_handle, view_id, spec.held, fence);
             } else {
-                entry.holds.hold_unfenced(seq, spec.buffer);
+                entry.holds.hold_unfenced(seq, spec.held);
             }
         }
         observe::emit(Observed::Submitted {
@@ -359,7 +358,13 @@ impl State {
         &mut self,
         buffer: &smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
     ) {
-        let Some((buffer_id, views)) = self.buffers.destroyed(buffer) else {
+        self.retire_key(&BufferKey::client(buffer));
+    }
+
+    /// The buffer @p key names is gone: every view it was shown in drops its
+    /// import of it.
+    pub fn retire_key(&mut self, key: &BufferKey) {
+        let Some((buffer_id, views)) = self.buffers.destroyed(key) else {
             return;
         };
         for view_id in views {
