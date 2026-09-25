@@ -27,7 +27,7 @@ use smithay::wayland::shm::ShmState;
 use smithay::wayland::viewporter::ViewporterState;
 
 use crate::buffers::BufferIds;
-use crate::caps::FormatModifier;
+use crate::caps::Caps;
 use crate::observe::{self, Observed};
 use crate::pacing::Loose;
 use crate::submit::Holds;
@@ -118,13 +118,12 @@ impl State {
         dh: DisplayHandle,
         loop_signal: LoopSignal,
         loop_handle: LoopHandle<'static, State>,
-        formats: &[FormatModifier],
+        caps: &Caps,
     ) -> Self {
         let mut seat_state = SeatState::new();
         let seat = seat_state.new_wl_seat(&dh, "seat0");
         let mut dmabuf_state = DmabufState::new();
-        let dmabuf_global =
-            dmabuf_state.create_global::<Self>(&dh, crate::handlers::dmabuf::formats(formats));
+        let dmabuf_global = crate::handlers::dmabuf::global(&mut dmabuf_state, &dh, caps);
         State {
             compositor_state: CompositorState::new::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),

@@ -24,7 +24,7 @@ use wayland_protocols::wp::commit_timing::v1::client::{
 };
 use wayland_protocols::wp::fifo::v1::client::{wp_fifo_manager_v1, wp_fifo_v1};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
-    zwp_linux_buffer_params_v1, zwp_linux_dmabuf_v1,
+    zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
 };
 use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
     wp_linux_drm_syncobj_manager_v1, wp_linux_drm_syncobj_surface_v1,
@@ -39,6 +39,10 @@ struct App {
     subcompositor: Option<wl_subcompositor::WlSubcompositor>,
     shm: Option<wl_shm::WlShm>,
     dmabuf: Option<zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1>,
+    dmabuf_version: u32,
+    /// Default feedback's main_device, once its done arrived.
+    main_device: Option<u64>,
+    pending_main_device: Option<u64>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     globals: Vec<String>,
     configured: bool,
@@ -405,7 +409,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
                 "wl_subcompositor" => app.subcompositor = Some(registry.bind(name, 1, qh, ())),
                 "zwp_linux_dmabuf_v1" => {
-                    app.dmabuf = Some(registry.bind(name, version.min(3), qh, ()))
+                    app.dmabuf_version = version;
+                    app.dmabuf = Some(registry.bind(name, version.min(4), qh, ()))
                 }
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
                 "wp_presentation" => {
@@ -619,6 +624,19 @@ impl Client {
         surface.set_release_point(timeline, (release >> 32) as u32, release as u32);
     }
 
+    /// The advertised zwp_linux_dmabuf_v1 version.
+    pub fn dmabuf_version(&self) -> u32 {
+        self.app.dmabuf_version
+    }
+
+    /// The default feedback's main_device (v4 only).
+    pub fn default_feedback_main_device(&mut self) -> Option<u64> {
+        let qh = self.queue.handle();
+        let _feedback = self.app.dmabuf.as_ref()?.get_default_feedback(&qh, ());
+        self.dispatch_until("dma-buf feedback", |c| c.app.main_device.is_some());
+        self.app.main_device
+    }
+
     /// True once the server has gone away.
     pub fn roundtrip_fails(&mut self) -> bool {
         self.queue.roundtrip(&mut self.app).is_err()
@@ -683,3 +701,27 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, usize> for App {
 delegate_noop!(App: ignore wp_linux_drm_syncobj_manager_v1::WpLinuxDrmSyncobjManagerV1);
 delegate_noop!(App: ignore wp_linux_drm_syncobj_surface_v1::WpLinuxDrmSyncobjSurfaceV1);
 delegate_noop!(App: ignore wp_linux_drm_syncobj_timeline_v1::WpLinuxDrmSyncobjTimelineV1);
+
+impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                let mut dev = [0u8; 8];
+                let n = device.len().min(8);
+                dev[..n].copy_from_slice(&device[..n]);
+                app.pending_main_device = Some(u64::from_ne_bytes(dev));
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::Done => {
+                app.main_device = app.pending_main_device;
+            }
+            _ => {}
+        }
+    }
+}

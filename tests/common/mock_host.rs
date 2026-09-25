@@ -129,6 +129,8 @@ struct Registry {
     fences: Vec<(u32, OwnedFd)>,
     /// Read the pixel at (x, y) of each submitted buffer.
     probe: Option<(u32, u32)>,
+    /// What query_capabilities reports as the render device.
+    render_device: u64,
 }
 
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
@@ -172,6 +174,7 @@ unsafe extern "C" fn query_capabilities(
     (*out).backend_key = KEY.as_ptr();
     (*out).kinds = sys::IHS_PV_KIND_TEXTURE_DMABUF_IMPORT | sys::IHS_PV_KIND_SOFTWARE_SHM;
     (*out).explicit_sync = 1;
+    (*out).render_device = with(|r| r.render_device);
     0
 }
 
@@ -424,6 +427,12 @@ pub fn dispose_view(id: i32) {
     if let Some(dispose) = view.callbacks.dispose {
         unsafe { dispose(view.user_data as *mut c_void) };
     }
+}
+
+/// Report @p dev as the shell's render device (0: unknown). Read when the
+/// server starts.
+pub fn set_render_device(dev: u64) {
+    with(|r| r.render_device = dev);
 }
 
 /// Read the pixel at (@p x, @p y) of every buffer submitted from now on.

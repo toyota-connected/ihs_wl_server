@@ -42,6 +42,10 @@ Early development. Working today:
 - Buffers are released to the client when the shell's release fence signals.
   Without a fence, a buffer is released once a later frame is on screen.
   Frame callbacks fire when a frame is shown.
+- `zwp_linux_dmabuf_v1` v4 with default feedback naming the shell's render
+  device as main device, so Mesa's Wayland EGL and Vulkan, GTK and Qt render
+  on the GPU the shell imports on. A shell that cannot tell its device gets
+  v3.
 - Frame timing follows the shell's reports of shown frames. Presentation
   feedback carries the display's time, refresh, counter and flags (including
   zero-copy). A fifo barrier clears once the update that set it is shown. A
@@ -53,7 +57,7 @@ Not yet implemented:
 
 - Input: pointer, touch and keyboard.
 - Binding a view to its toplevel by activation token.
-- dma-buf feedback and fractional scale.
+- Per-surface dma-buf feedback (scanout tranches) and fractional scale.
 
 The C entry points for input and activation tokens exist. For now they return
 `IHS_WL_RESULT_ERR_UNSUPPORTED`.
@@ -75,7 +79,7 @@ This crate needs:
 - **Rust 1.98.1.** It is pinned in `rust-toolchain.toml` to match the compiler
   that meta-lts-mixins `scarthgap/rust` ships, so host builds and Yocto
   builds use the same compiler.
-- **ivi-homescreen's shared library (`libihs_shared`), at ABI version 1.13 or
+- **ivi-homescreen's shared library (`libihs_shared`), at ABI version 1.14 or
   newer.** The build finds it through `ivi-homescreen-shared.pc` and generates
   bindings from its headers.
 - **clang**, for bindgen.
