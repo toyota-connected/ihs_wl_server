@@ -9,10 +9,17 @@
 //! `eglBindWaylandDisplayWL` (EGL_WL_bind_wayland_display) on its
 //! libwayland-server display, and the EGL library serves the protocol
 //! itself. Their clients fail eglInitialize otherwise. With this feature the
-//! server runs on libwayland-server, binds an EGL display to it -- a display
-//! only: no context, nothing rendered -- and turns each such wl_buffer into
-//! a dma-buf through libgbm (GBM_BO_IMPORT_WL_BUFFER), which the shell then
-//! imports like any other.
+//! server runs on libwayland-server and binds an EGL display to it -- a
+//! display only: no context, nothing rendered.
+//!
+//! Which display, and what the shell is handed, depends on the shell:
+//! - one that samples image layers (IHS_PV_KIND_TEXTURE_EGL_IMAGE, the EGL
+//!   backends) gets each buffer as an EGLImage made on its own display. The
+//!   driver keeps everything about the buffer, compression included.
+//! - otherwise each buffer becomes a dma-buf through libgbm
+//!   (GBM_BO_IMPORT_WL_BUFFER), bound on a display of the module's own. A
+//!   dma-buf cannot carry every kind of compression metadata, so compressed
+//!   buffers can show corrupted there.
 
 use std::collections::HashMap;
 
@@ -21,37 +28,83 @@ use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::{DisplayHandle, Resource, Weak};
 
-/// The bound EGL display and the buffers it has shared, as dma-bufs.
+use crate::caps::Caps;
+
+/// What a layer shows. Images only come with the `egl-wl-display` feature.
+#[derive(Clone)]
+#[cfg_attr(not(feature = "egl-wl-display"), allow(dead_code))]
+pub enum Content {
+    Dmabuf(Dmabuf),
+    Image(Image),
+}
+
+/// An EGLImage on the shell's display, owned by the module until the buffer
+/// behind it goes.
+#[derive(Clone, Copy, Debug)]
+pub struct Image {
+    /// EGLImageKHR, as an address.
+    pub egl_image: usize,
+    pub width: u32,
+    pub height: u32,
+    /// Sampled as GL_TEXTURE_EXTERNAL_OES.
+    pub external: bool,
+    /// Stored bottom row first.
+    pub y_inverted: bool,
+}
+
+#[cfg(feature = "egl-wl-display")]
+type Keep = Option<smithay::backend::egl::EGLBuffer>;
+#[cfg(not(feature = "egl-wl-display"))]
+type Keep = ();
+
+/// The bound EGL display and the buffers it has shared.
 #[derive(Default)]
 pub struct EglBuffers {
     #[cfg(feature = "egl-wl-display")]
-    bound: Option<bound::Bound>,
-    cache: HashMap<ObjectId, (Weak<WlBuffer>, Dmabuf)>,
+    mode: Option<Mode>,
+    /// Each buffer's content, and what keeps its image alive.
+    cache: HashMap<ObjectId, (Weak<WlBuffer>, Content, Keep)>,
+}
+
+#[cfg(feature = "egl-wl-display")]
+enum Mode {
+    Shared(shared::Shared),
+    Gbm(bound::Bound),
 }
 
 impl EglBuffers {
     /// Bind an EGL display to the server's display, when the feature is on
-    /// and the EGL implementation and libgbm can.
+    /// and the EGL implementation can: the shell's, when it samples image
+    /// layers, else one of the module's own.
     #[cfg_attr(not(feature = "egl-wl-display"), allow(unused_variables))]
-    pub fn bind(dh: &DisplayHandle) -> Self {
+    pub fn bind(dh: &DisplayHandle, caps: &Caps) -> Self {
+        #[cfg(feature = "egl-wl-display")]
+        let mode = caps
+            .egl_images
+            .and_then(|shell| shared::Shared::new(dh, shell))
+            .map(Mode::Shared)
+            .or_else(|| bound::Bound::new(dh).map(Mode::Gbm));
         EglBuffers {
             #[cfg(feature = "egl-wl-display")]
-            bound: bound::Bound::new(dh),
+            mode,
             cache: HashMap::new(),
         }
     }
 
-    /// The dma-buf behind @p buffer, when the EGL implementation made it.
-    pub fn dmabuf(&mut self, buffer: &WlBuffer) -> Option<Dmabuf> {
-        if let Some((_, dmabuf)) = self.cache.get(&buffer.id()) {
-            return Some(dmabuf.clone());
+    /// What @p buffer shows, when the EGL implementation made it.
+    pub fn content(&mut self, buffer: &WlBuffer) -> Option<Content> {
+        if let Some((_, content, _)) = self.cache.get(&buffer.id()) {
+            return Some(content.clone());
         }
         #[cfg(feature = "egl-wl-display")]
         {
-            let dmabuf = self.bound.as_mut()?.import(buffer)?;
+            let (content, keep) = match self.mode.as_mut()? {
+                Mode::Shared(shared) => shared.import(buffer)?,
+                Mode::Gbm(bound) => (Content::Dmabuf(bound.import(buffer)?), None),
+            };
             self.cache
-                .insert(buffer.id(), (buffer.downgrade(), dmabuf.clone()));
-            Some(dmabuf)
+                .insert(buffer.id(), (buffer.downgrade(), content.clone(), keep));
+            Some(content)
         }
         #[cfg(not(feature = "egl-wl-display"))]
         None
@@ -62,13 +115,70 @@ impl EglBuffers {
         let dead: Vec<ObjectId> = self
             .cache
             .iter()
-            .filter(|(_, (weak, _))| weak.upgrade().is_err())
+            .filter(|(_, (weak, _, _))| weak.upgrade().is_err())
             .map(|(id, _)| id.clone())
             .collect();
         for id in &dead {
             self.cache.remove(id);
         }
         dead
+    }
+}
+
+#[cfg(feature = "egl-wl-display")]
+mod shared {
+    use smithay::backend::egl::display::EGLBufferReader;
+    use smithay::backend::egl::{EGLBuffer, EGLDisplay, Format};
+    use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+    use smithay::reexports::wayland_server::DisplayHandle;
+
+    use super::{Content, Image};
+    use crate::caps::ShellEgl;
+
+    /// Bound to the shell's own display, handing it EGLImages.
+    pub struct Shared {
+        // Dropped in this order: the reader unbinds before the display goes.
+        reader: EGLBufferReader,
+        _display: EGLDisplay,
+    }
+
+    impl Shared {
+        pub fn new(dh: &DisplayHandle, shell: ShellEgl) -> Option<Self> {
+            // SAFETY: the shell's display and config, valid for the backend's
+            // life; wrapped, not owned, so never terminated from here.
+            let display = unsafe {
+                EGLDisplay::from_raw(shell.display as *const _, shell.config as *const _)
+            }
+            .map_err(|e| tracing::info!("shell EGL display: {e}"))
+            .ok()?;
+            let reader = display
+                .bind_wl_display(dh)
+                .map_err(|e| tracing::info!("eglBindWaylandDisplayWL on the shell's display: {e}"))
+                .ok()?;
+            tracing::info!("shell EGL display bound to the Wayland display; buffers go as images");
+            Some(Shared {
+                reader,
+                _display: display,
+            })
+        }
+
+        pub fn import(&self, buffer: &WlBuffer) -> Option<(Content, Option<EGLBuffer>)> {
+            let egl = match self.reader.egl_buffer_contents(buffer) {
+                Ok(egl) => egl,
+                Err(e) => {
+                    tracing::debug!("EGL wl_buffer: {e}");
+                    return None;
+                }
+            };
+            let image = Image {
+                egl_image: egl.image(0)? as usize,
+                width: egl.size.w.max(0) as u32,
+                height: egl.size.h.max(0) as u32,
+                external: matches!(egl.format, Format::External),
+                y_inverted: egl.y_inverted,
+            };
+            Some((Content::Image(image), Some(egl)))
+        }
     }
 }
 

@@ -24,7 +24,10 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::compositor::{self, SurfaceAttributes, TraversalAction};
 
+use smithay::backend::allocator::dmabuf::Dmabuf;
+
 use crate::buffers::BufferKey;
+use crate::egl_display::Content;
 use crate::ffi::ihs::sys;
 use crate::observe::{self, Observed};
 use crate::state::State;
@@ -116,9 +119,38 @@ fn fixed(v: f64) -> i64 {
 
 /// The frame description for @p spec, with its planes' fds dup'd. None when
 /// a dup fails, with nothing left open.
-fn frame_for(spec: &LayerSpec, buffer_id: u32) -> Option<sys::IhsFrame> {
-    let format = spec.dmabuf.format();
-    let (width, height) = tree::dmabuf_size(&spec.dmabuf);
+/// What goes to the shell for one layer.
+enum Prepared {
+    /// Dups of a dma-buf's fds, which the shell consumes.
+    Frame(sys::IhsFrame),
+    /// An EGLImage on the shell's display.
+    Image(sys::IhsImage),
+}
+
+fn prepare(spec: &LayerSpec, buffer_id: u32) -> Option<Prepared> {
+    match &spec.content {
+        Content::Dmabuf(dmabuf) => frame_for(dmabuf, buffer_id).map(Prepared::Frame),
+        Content::Image(image) => Some(Prepared::Image(sys::IhsImage {
+            struct_size: std::mem::size_of::<sys::IhsImage>(),
+            egl_image: image.egl_image as *mut std::ffi::c_void,
+            width: image.width,
+            height: image.height,
+            buffer_id,
+            external_oes: image.external as u8,
+            reserved: [0; 3],
+        })),
+    }
+}
+
+fn close_prepared(prepared: &Prepared) {
+    if let Prepared::Frame(frame) = prepared {
+        close_frame(frame);
+    }
+}
+
+fn frame_for(dmabuf: &Dmabuf, buffer_id: u32) -> Option<sys::IhsFrame> {
+    let format = dmabuf.format();
+    let (width, height) = tree::dmabuf_size(dmabuf);
     let mut frame = sys::IhsFrame {
         struct_size: std::mem::size_of::<sys::IhsFrame>(),
         format: sys::IhsFormatModifier {
@@ -132,11 +164,10 @@ fn frame_for(spec: &LayerSpec, buffer_id: u32) -> Option<sys::IhsFrame> {
         buffer_id,
         ..Default::default()
     };
-    let planes = spec
-        .dmabuf
+    let planes = dmabuf
         .handles()
-        .zip(spec.dmabuf.offsets())
-        .zip(spec.dmabuf.strides())
+        .zip(dmabuf.offsets())
+        .zip(dmabuf.strides())
         .take(4);
     for (i, ((fd, offset), stride)) in planes.enumerate() {
         match fd.try_clone_to_owned() {
@@ -168,7 +199,11 @@ fn physical(v: i32, dpr: f64) -> i64 {
     (v as f64 * dpr).round() as i64
 }
 
-fn layer_for(spec: &LayerSpec, frame: &sys::IhsFrame, dpr: f64) -> sys::IhsLayer {
+fn layer_for(spec: &LayerSpec, prepared: &Prepared, dpr: f64) -> sys::IhsLayer {
+    let (frame, image): (*const sys::IhsFrame, *const sys::IhsImage) = match prepared {
+        Prepared::Frame(frame) => (frame, std::ptr::null()),
+        Prepared::Image(image) => (std::ptr::null(), image),
+    };
     let clamp_i = |v: i64| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let clamp_u = |v: i64| v.clamp(0, u32::MAX as i64) as u32;
     sys::IhsLayer {
@@ -194,6 +229,7 @@ fn layer_for(spec: &LayerSpec, frame: &sys::IhsFrame, dpr: f64) -> sys::IhsLayer
         opaque: spec.opaque as u8,
         content_type: 0,
         reserved: [0; 2],
+        image,
     }
 }
 
@@ -265,24 +301,24 @@ impl State {
             .take(sys::IHS_PV_MAX_LAYERS as usize)
             .collect();
 
-        let mut frames: Vec<sys::IhsFrame> = Vec::with_capacity(specs.len());
+        let mut prepared: Vec<Prepared> = Vec::with_capacity(specs.len());
         for spec in &specs {
             let id = self.buffers.id_for(&spec.key, view_id);
-            match frame_for(spec, id) {
-                Some(frame) => frames.push(frame),
+            match prepare(spec, id) {
+                Some(p) => prepared.push(p),
                 None => {
-                    frames.iter().for_each(close_frame);
+                    prepared.iter().for_each(close_prepared);
                     return None;
                 }
             }
         }
-        // Built after every frame is in place: the layers point into
-        // `frames`, which must not move again.
+        // Built after every frame and image is in place: the layers point
+        // into `prepared`, which must not move again.
         let dpr = self.views.get(&view_id).map_or(1.0, |v| v.dpr);
         let layers: Vec<sys::IhsLayer> = specs
             .iter()
-            .zip(frames.iter())
-            .map(|(spec, frame)| layer_for(spec, frame, dpr))
+            .zip(prepared.iter())
+            .map(|(spec, p)| layer_for(spec, p, dpr))
             .collect();
         let mut release = vec![-1; layers.len()];
 
@@ -303,7 +339,7 @@ impl State {
                 },
                 None => {
                     // Disposed since the command queue last looked.
-                    frames.iter().for_each(close_frame);
+                    prepared.iter().for_each(close_prepared);
                     return None;
                 }
             }
@@ -432,6 +468,50 @@ pub fn send_frame_callbacks(root: &WlSurface, ust_ns: u64) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use smithay::utils::{Rectangle, Size};
+
+    use crate::egl_display::Image;
+    use crate::tree::Held;
+
+    fn image_spec() -> LayerSpec {
+        LayerSpec {
+            layer_id: 7,
+            held: Held::Staged(Arc::new(())),
+            key: BufferKey::Staged(1),
+            content: Content::Image(Image {
+                egl_image: 0x1234,
+                width: 64,
+                height: 32,
+                external: true,
+                y_inverted: false,
+            }),
+            src: Rectangle::from_size(Size::from((64.0, 32.0))),
+            dst: Rectangle::from_size(Size::from((64, 32))),
+            transform: 0,
+            opaque: false,
+            generation: 0,
+        }
+    }
+
+    #[test]
+    fn an_image_layer_goes_as_an_image() {
+        let spec = image_spec();
+        let prepared = prepare(&spec, 9).expect("prepared");
+        let Prepared::Image(image) = &prepared else {
+            panic!("not an image");
+        };
+        assert_eq!(image.egl_image as usize, 0x1234);
+        assert_eq!((image.width, image.height, image.buffer_id), (64, 32, 9));
+        assert_eq!(image.external_oes, 1);
+        let layer = layer_for(&spec, &prepared, 1.0);
+        assert!(layer.frame.is_null());
+        assert_eq!(layer.image, image as *const sys::IhsImage);
+        assert_eq!(layer.layer_id, 7);
+        assert_eq!((layer.dst_w, layer.dst_h), (64, 32));
+    }
+
     use super::*;
 
     #[test]
