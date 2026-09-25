@@ -206,7 +206,12 @@ unsafe extern "C" fn submit_layers(
     seq: u64,
     out_fences: *mut c_int,
 ) -> c_int {
-    let layers = std::slice::from_raw_parts(layers, count);
+    // The registry takes NULL for no layers.
+    let layers = if count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(layers, count)
+    };
     let mut recorded = Vec::new();
     for (i, l) in layers.iter().enumerate() {
         let f = &*l.frame;

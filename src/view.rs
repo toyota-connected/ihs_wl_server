@@ -35,6 +35,9 @@ pub struct ViewShared {
     pub id: i32,
     /// What the widget passed in creationParams: what to bind to.
     pub params: ViewParams,
+    /// Its size at creation, in the units `resize` uses; the view is laid out
+    /// before it is created, so no resize may follow.
+    pub size: Option<(i32, i32)>,
     pub link: Mutex<Option<ViewLink>>,
 }
 
@@ -131,9 +134,11 @@ unsafe extern "C" fn factory(
                 (*info).params_size,
             ))
         };
+        let (w, h) = ((*info).width.round(), (*info).height.round());
         let shared = Arc::new(ViewShared {
             id,
             params,
+            size: (w >= 1.0 && h >= 1.0).then_some((w as i32, h as i32)),
             link: Mutex::new(Some(ViewLink { view, grant })),
         });
         if let Err(e) = thread::send(Cmd::ViewCreated(shared.clone())) {

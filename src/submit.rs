@@ -227,6 +227,9 @@ impl State {
             );
         }
         if built.layers.is_empty() {
+            // Nothing the shell can show (only shared-memory surfaces, say):
+            // show nothing rather than the frame before.
+            self.clear_view(view_id);
             return None;
         }
         if built.layers.len() > sys::IHS_PV_MAX_LAYERS as usize {
@@ -294,6 +297,7 @@ impl State {
             return None;
         }
         entry.seq = seq;
+        entry.cleared = false;
         let n = specs.len();
         let shown: Vec<(u32, u64)> = specs.iter().map(|s| (s.layer_id, s.generation)).collect();
         for (spec, fd) in specs.into_iter().zip(release) {
@@ -313,6 +317,40 @@ impl State {
             layers: n,
         });
         Some((seq, shown))
+    }
+
+    /// Show nothing in @p view_id: its toplevel is gone, or has nothing the
+    /// shell can show. Once; a view already showing nothing is left alone.
+    pub fn clear_view(&mut self, view_id: i32) {
+        let Some(entry) = self.views.get_mut(&view_id) else {
+            return;
+        };
+        if entry.cleared || entry.seq == 0 {
+            // Nothing was ever shown, or nothing is now.
+            return;
+        }
+        let seq = entry.seq + 1;
+        let rc = {
+            let link = entry.handle.link.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(link) = link.as_ref() else {
+                return;
+            };
+            // SAFETY: as for submit, under the view's lock. No layers: NULL.
+            unsafe {
+                sys::ihs_pv_submit_layers(link.view, std::ptr::null(), 0, seq, std::ptr::null_mut())
+            }
+        };
+        if rc != sys::IHS_PV_OK {
+            tracing::warn!(view_id, rc, "clearing the view failed");
+            return;
+        }
+        entry.seq = seq;
+        entry.cleared = true;
+        observe::emit(Observed::Submitted {
+            view_id,
+            seq,
+            layers: 0,
+        });
     }
 
     /// The client destroyed a buffer: every view it was shown in drops its

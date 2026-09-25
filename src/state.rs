@@ -103,6 +103,8 @@ pub struct ViewEntry {
     pub seq: u64,
     /// Buffers the shell may still be using.
     pub holds: Holds,
+    /// Its last submit showed nothing.
+    pub cleared: bool,
     /// Submitted frames awaiting the shell's report.
     pub frames: Frames,
     /// Out of the scene: nothing it shows is reported.
@@ -189,6 +191,7 @@ impl State {
             Cmd::Quit => self.loop_signal.stop(),
             Cmd::ViewCreated(view) => {
                 let id = view.id;
+                let size = view.size;
                 if self.views.contains_key(&id) {
                     // A create under a live id disposes the incumbent first
                     // (hot restart), so this is only an ordering race.
@@ -200,9 +203,10 @@ impl State {
                     ViewEntry {
                         handle: view,
                         toplevel: None,
-                        size: None,
+                        size,
                         seq: 0,
                         holds: Holds::default(),
+                        cleared: false,
                         frames: Frames::default(),
                         suspended: false,
                     },
@@ -289,6 +293,8 @@ impl State {
     /// Break the view's binding, handing back every buffer it held.
     pub fn unbind_view(&mut self, view_id: i32) {
         self.drop_frames(view_id);
+        // Else the shell keeps showing the toplevel's last frame.
+        self.clear_view(view_id);
         let Some(entry) = self.views.get_mut(&view_id) else {
             return;
         };
