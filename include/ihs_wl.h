@@ -10,6 +10,11 @@
 #include <stdint.h>
 
 /*
+ What `ihs_wl_pointer` returns when the client hid the cursor.
+ */
+#define IHS_WL_CURSOR_HIDDEN 65536
+
+/*
  Result codes. Entry points return these as `int`.
  */
 enum IhsWlResult
@@ -209,8 +214,10 @@ int ihs_wl_activation_token(char *out, size_t cap);
 
 /*
  Pointer input for the view `view_id`. Any thread; only enqueues. Returns
- the client's cursor shape (`wp_cursor_shape_device_v1.shape`), 0 while
- none is known, or a negative error.
+ the cursor the client under the pointer asked for, as of the events
+ handled so far: a `wp_cursor_shape_device_v1.shape` (the default, 1, for
+ a cursor surface of its own), `IHS_WL_CURSOR_HIDDEN`, 0 before any
+ client asked -- or a negative error.
 
  # Safety
  `ev` must point to a readable `IhsWlPointerEvent`.

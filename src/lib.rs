@@ -18,6 +18,7 @@ use std::panic::{self, AssertUnwindSafe};
 mod buffers;
 mod caps;
 mod config;
+mod cursor;
 mod egl_display;
 mod error;
 #[doc(hidden)]
@@ -66,6 +67,9 @@ pub enum IhsWlResult {
     /// The output buffer is too small.
     ErrTooSmall = -7,
 }
+
+/// What `ihs_wl_pointer` returns when the client hid the cursor.
+pub const IHS_WL_CURSOR_HIDDEN: c_int = 0x10000;
 
 /// Start-up configuration.
 #[repr(C)]
@@ -255,8 +259,10 @@ pub unsafe extern "C" fn ihs_wl_activation_token(out: *mut c_char, cap: usize) -
 }
 
 /// Pointer input for the view `view_id`. Any thread; only enqueues. Returns
-/// the client's cursor shape (`wp_cursor_shape_device_v1.shape`), 0 while
-/// none is known, or a negative error.
+/// the cursor the client under the pointer asked for, as of the events
+/// handled so far: a `wp_cursor_shape_device_v1.shape` (the default, 1, for
+/// a cursor surface of its own), `IHS_WL_CURSOR_HIDDEN`, 0 before any
+/// client asked -- or a negative error.
 ///
 /// # Safety
 /// `ev` must point to a readable `IhsWlPointerEvent`.
@@ -274,7 +280,7 @@ pub unsafe extern "C" fn ihs_wl_pointer(view_id: i32, ev: *const IhsWlPointerEve
             return Err(Error::invalid("pointer event is not finite"));
         }
         thread::send(thread::Cmd::Pointer { view_id, event })?;
-        Ok(0)
+        Ok(cursor::current())
     })
 }
 

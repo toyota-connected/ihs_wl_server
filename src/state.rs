@@ -68,6 +68,9 @@ pub struct State {
     /// What the shell imports.
     pub caps: Caps,
     pub seat_state: SeatState<Self>,
+    /// Kept alive for the global's lifetime.
+    #[allow(dead_code)]
+    pub cursor_shape_state: smithay::wayland::cursor_shape::CursorShapeManagerState,
     pub data_device_state: DataDeviceState,
     /// Kept alive for the global's lifetime.
     #[allow(dead_code)]
@@ -136,6 +139,7 @@ impl State {
         loop_handle: LoopHandle<'static, State>,
         caps: &Caps,
     ) -> Self {
+        crate::cursor::reset();
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         let devices = crate::input::Devices::add(&mut seat);
@@ -160,6 +164,9 @@ impl State {
             gbm_buffer: crate::gbm_buffer::GbmBufferState::new(&dh),
             caps: caps.clone(),
             data_device_state: DataDeviceState::new::<Self>(&dh),
+            cursor_shape_state: smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(
+                &dh,
+            ),
             seat_state,
             seat,
             devices,

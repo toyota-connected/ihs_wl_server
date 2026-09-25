@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'input.dart';
 import 'server.dart';
 
 /// The platform-view type the module's factory registers.
@@ -20,9 +21,10 @@ const String _viewType = 'ihs_wl/toplevel';
 /// is the oldest toplevel not shown elsewhere, whatever its app_id. Until a
 /// matching client maps, the view is empty.
 ///
-/// Pointer and touch input over the view go to the client under it. The
-/// view takes keyboard focus when pressed and gives it up on a press
-/// anywhere else; while it has focus every key goes to the client.
+/// Pointer and touch input over the view go to the client under it, and the
+/// mouse cursor over it is the one the client asks for. The view takes
+/// keyboard focus when pressed and gives it up on a press anywhere else;
+/// while it has focus every key goes to the client.
 class WaylandToplevelView extends StatefulWidget {
   const WaylandToplevelView({
     super.key,
@@ -118,41 +120,76 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
             behavior: HitTestBehavior.opaque,
             onPointerDown: (_) => _focus.requestFocus(),
             onPointerSignal: _onSignal,
-            child: PlatformViewLink(
-              viewType: _viewType,
-              surfaceFactory:
-                  (BuildContext context, PlatformViewController controller) {
-                    return PlatformViewSurface(
-                      controller: controller,
-                      gestureRecognizers:
-                          const <Factory<OneSequenceGestureRecognizer>>{
-                            Factory<OneSequenceGestureRecognizer>(
-                              EagerGestureRecognizer.new,
-                            ),
-                          },
-                      hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+            child: Stack(
+              children: <Widget>[
+                PlatformViewLink(
+                  viewType: _viewType,
+                  surfaceFactory:
+                      (
+                        BuildContext context,
+                        PlatformViewController controller,
+                      ) {
+                        return PlatformViewSurface(
+                          controller: controller,
+                          gestureRecognizers:
+                              const <Factory<OneSequenceGestureRecognizer>>{
+                                Factory<OneSequenceGestureRecognizer>(
+                                  EagerGestureRecognizer.new,
+                                ),
+                              },
+                          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+                        );
+                      },
+                  onCreatePlatformView: (PlatformViewCreationParams params) {
+                    // PlatformViewLink calls create(size:) once laid out, so
+                    // the view is created at its real size rather than 0x0.
+                    return _ToplevelViewController(
+                      id: params.id,
+                      creationParams: <String, Object?>{
+                        'token': widget.activationToken,
+                        'app_id': widget.appId,
+                        'dpr': dpr,
+                      },
+                      onCreated: (int id) {
+                        _created(id);
+                        params.onPlatformViewCreated(id);
+                      },
                     );
                   },
-              onCreatePlatformView: (PlatformViewCreationParams params) {
-                // PlatformViewLink calls create(size:) once laid out, so the
-                // view is created at its real size rather than 0x0.
-                return _ToplevelViewController(
-                  id: params.id,
-                  creationParams: <String, Object?>{
-                    'token': widget.activationToken,
-                    'app_id': widget.appId,
-                    'dpr': dpr,
-                  },
-                  onCreated: (int id) {
-                    _created(id);
-                    params.onPlatformViewCreated(id);
-                  },
-                );
-              },
+                ),
+                // A platform view leaves the cursor to the platform: this
+                // sets it, without taking the events from the view.
+                Positioned.fill(child: _ClientCursor(input: waylandInput)),
+              ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The cursor the client under the pointer asks for.
+class _ClientCursor extends StatelessWidget {
+  const _ClientCursor({required this.input});
+
+  final WaylandInput? input;
+
+  @override
+  Widget build(BuildContext context) {
+    final WaylandInput? input = this.input;
+    if (input == null) {
+      return const SizedBox.expand();
+    }
+    return ValueListenableBuilder<int>(
+      valueListenable: input.cursor,
+      builder: (BuildContext context, int shape, Widget? child) => MouseRegion(
+        opaque: false,
+        hitTestBehavior: HitTestBehavior.translucent,
+        cursor: cursorFor(shape),
+        child: child,
+      ),
+      child: const SizedBox.expand(),
     );
   }
 }
