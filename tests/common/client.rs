@@ -245,6 +245,28 @@ impl Client {
         self.roundtrip();
     }
 
+    /// Attach a fresh @p width x @p height ARGB shm buffer to the toplevel and
+    /// commit.
+    pub fn commit_shm_buffer(&mut self, width: i32, height: i32) {
+        let qh = self.queue.handle();
+        let stride = width * 4;
+        let size = (stride * height) as usize;
+        let file = memfd(size);
+        let pool = self
+            .app
+            .shm
+            .as_ref()
+            .unwrap()
+            .create_pool(file.as_fd(), size as i32, &qh, ());
+        let buffer =
+            pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, &qh, ());
+        let surface = self._surface.as_ref().unwrap();
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, width, height);
+        surface.commit();
+        self.roundtrip();
+    }
+
     /// Mark the whole toplevel surface opaque at its next commit.
     pub fn set_opaque(&mut self, width: i32, height: i32) {
         let qh = self.queue.handle();

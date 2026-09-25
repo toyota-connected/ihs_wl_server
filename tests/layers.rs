@@ -336,3 +336,60 @@ fn a_commit_waits_for_its_buffer_to_be_ready() {
     );
     mock_host::dispose_view(10);
 }
+
+/// A view is laid out before it is created, so no resize need follow: the
+/// toplevel is configured to the size it was created at.
+#[test]
+fn a_toplevel_is_configured_to_the_created_view_size() {
+    let _serial = serial();
+    let mut h = Harness::new("ihs-wl-test-initial-size");
+    h.client.create_toplevel("org.example.h", "h");
+    let a = h.client.new_dmabuf(32, 32);
+    h.client.commit_buffer(a, false);
+    h.bind(11, "org.example.h", 800.0, 600.0);
+    h.client
+        .dispatch_until("configure to the created size", |c| {
+            c.configure_size() == Some((800, 600))
+        });
+    mock_host::dispose_view(11);
+}
+
+/// A view whose client exits shows nothing, rather than its last frame.
+#[test]
+fn a_view_is_cleared_when_its_toplevel_goes() {
+    let _serial = serial();
+    let mut h = Harness::new("ihs-wl-test-clear-exit");
+    h.client.create_toplevel("org.example.i", "i");
+    let a = h.client.new_dmabuf(16, 16);
+    h.client.commit_buffer(a, false);
+    h.bind(12, "org.example.i", 16.0, 16.0);
+    h.wait_submissions(12, 1);
+
+    h.client = Client::connect("ihs-wl-test-clear-exit");
+    let subs = h.wait_submissions(12, 2);
+    assert!(subs[1].layers.is_empty(), "the last frame was left up");
+    assert!(subs[1].seq > subs[0].seq);
+    mock_host::dispose_view(12);
+}
+
+/// A toplevel with nothing the shell can show -- only shared memory, for now
+/// -- clears its view once, not on every commit.
+#[test]
+fn a_view_with_nothing_to_show_is_cleared_once() {
+    let _serial = serial();
+    let mut h = Harness::new("ihs-wl-test-clear-shm");
+    h.client.create_toplevel("org.example.j", "j");
+    let a = h.client.new_dmabuf(16, 16);
+    h.client.commit_buffer(a, false);
+    h.bind(13, "org.example.j", 16.0, 16.0);
+    h.wait_submissions(13, 1);
+
+    h.client.commit_shm_buffer(16, 16);
+    h.client.commit_shm_buffer(16, 16);
+    let subs = h.wait_submissions(13, 2);
+    h.client.roundtrip();
+    let subs_after = Harness::submissions(13);
+    assert!(subs[1].layers.is_empty());
+    assert_eq!(subs_after.len(), 2, "cleared more than once");
+    mock_host::dispose_view(13);
+}
