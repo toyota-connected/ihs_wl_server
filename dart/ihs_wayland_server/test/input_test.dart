@@ -25,4 +25,15 @@ void main() {
     );
     expect(buttonChanges(kBackMouseButton, kBackMouseButton), isEmpty);
   });
+
+  test('cursor shapes map to Flutter cursors', () {
+    expect(cursorFor(0), SystemMouseCursors.basic); // none asked
+    expect(cursorFor(1), SystemMouseCursors.basic); // default
+    expect(cursorFor(4), SystemMouseCursors.click); // pointer
+    expect(cursorFor(9), SystemMouseCursors.text);
+    expect(cursorFor(29), SystemMouseCursors.resizeUpLeftDownRight); // nwse
+    expect(cursorFor(34), SystemMouseCursors.zoomOut);
+    expect(cursorFor(99), SystemMouseCursors.basic);
+    expect(cursorFor(cursorHidden), SystemMouseCursors.none);
+  });
 }

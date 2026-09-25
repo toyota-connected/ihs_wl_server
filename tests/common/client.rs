@@ -23,6 +23,9 @@ use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandl
 use wayland_protocols::wp::commit_timing::v1::client::{
     wp_commit_timer_v1, wp_commit_timing_manager_v1,
 };
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
+};
 use wayland_protocols::wp::fifo::v1::client::{wp_fifo_manager_v1, wp_fifo_v1};
 use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
@@ -82,6 +85,9 @@ struct App {
     toplevel_surface: u32,
     /// The serial of the last wl_pointer.button.
     button_serial: Option<u32>,
+    /// The serial of the last wl_pointer.enter.
+    enter_serial: Option<u32>,
+    cursor_shape_manager: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
     /// The popup's last xdg_popup.configure: x, y, width, height.
     popup_geometry: Option<(i32, i32, i32, i32)>,
     popup_done: bool,
@@ -540,6 +546,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.fractional_manager = Some(registry.bind(name, 1, qh, ()))
                 }
                 "wp_viewporter" => app.viewporter = Some(registry.bind(name, 1, qh, ())),
+                "wp_cursor_shape_manager_v1" => {
+                    app.cursor_shape_manager = Some(registry.bind(name, 1, qh, ()))
+                }
                 "wl_output" => {
                     registry.bind::<wayland_client::protocol::wl_output::WlOutput, _, _>(
                         name,
@@ -590,6 +599,8 @@ delegate_noop!(App: ignore wl_compositor::WlCompositor);
 delegate_noop!(App: ignore wayland_client::protocol::wl_output::WlOutput);
 delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(App: ignore wp_viewporter::WpViewporter);
+delegate_noop!(App: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
+delegate_noop!(App: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 delegate_noop!(App: ignore wp_viewport::WpViewport);
 
 impl Dispatch<wl_surface::WlSurface, ()> for App {
@@ -926,6 +937,40 @@ impl Client {
         self.take_input()
     }
 
+    /// Ask for cursor @p shape over the surface the pointer entered last.
+    pub fn set_cursor_shape(&mut self, shape: wp_cursor_shape_device_v1::Shape) {
+        let qh = self.queue.handle();
+        let manager = self
+            .app
+            .cursor_shape_manager
+            .as_ref()
+            .expect("cursor shape");
+        let device = manager.get_pointer(self.app.pointer.as_ref().unwrap(), &qh, ());
+        device.set_shape(self.app.enter_serial.unwrap(), shape);
+        device.destroy();
+        self.roundtrip();
+    }
+
+    /// wl_pointer.set_cursor over the surface the pointer entered last:
+    /// a surface of the client's own, or none to hide it.
+    pub fn set_cursor_surface(&mut self, own: bool) {
+        let qh = self.queue.handle();
+        let surface = own.then(|| {
+            self.app
+                .compositor
+                .as_ref()
+                .unwrap()
+                .create_surface(&qh, ())
+        });
+        self.app.pointer.as_ref().unwrap().set_cursor(
+            self.app.enter_serial.unwrap(),
+            surface.as_ref(),
+            0,
+            0,
+        );
+        self.roundtrip();
+    }
+
     /// Set the toplevel's window geometry at its next commit, and commit.
     pub fn set_window_geometry(&mut self, x: i32, y: i32, width: i32, height: i32) {
         let xdg = self.xdg.as_ref().unwrap();
@@ -979,12 +1024,15 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
                 surface,
                 surface_x,
                 surface_y,
-                ..
-            } => Input::Enter {
-                surface: surface.id().protocol_id(),
-                x: surface_x,
-                y: surface_y,
-            },
+                serial,
+            } => {
+                app.enter_serial = Some(serial);
+                Input::Enter {
+                    surface: surface.id().protocol_id(),
+                    x: surface_x,
+                    y: surface_y,
+                }
+            }
             wl_pointer::Event::Leave { surface, .. } => Input::Leave {
                 surface: surface.id().protocol_id(),
             },

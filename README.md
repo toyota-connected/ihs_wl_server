@@ -21,8 +21,8 @@ Early development. Working today:
   `wl_shm`, `zwp_linux_dmabuf_v1`, `wp_viewporter`, `wp_presentation`,
   `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`,
   `wp_linux_drm_syncobj_manager_v1` (when a render node supports it),
-  `wl_seat`, `wl_data_device_manager`, `wl_output` and
-  `zxdg_output_manager_v1`.
+  `wl_seat`, `wp_cursor_shape_manager_v1`, `wl_data_device_manager`,
+  `wl_output` and `zxdg_output_manager_v1`.
 - A view binds to a toplevel by app_id and configures it to the view's size.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
   buffer transforms and opaque regions) reaches the shell as one layer per
@@ -69,6 +69,11 @@ Early development. Working today:
   clients repeat them from `wl_keyboard.repeat_info` (600 ms, 25 Hz). The
   keymap is xkbcommon's default, set by the `XKB_DEFAULT_*` variables, as
   the shell's own is.
+- The mouse cursor over a view is the one its client asks for. The module
+  draws none: `ihs_wl_pointer` returns the client's `wp_cursor_shape_v1`
+  shape, and the view shows it as the matching Flutter cursor. A client that
+  sets a cursor surface of its own gets the default arrow; one that hides the
+  cursor (`IHS_WL_CURSOR_HIDDEN`) hides it.
 
 With the `egl-wl-display` cargo feature (off by default), the server runs on
 libwayland-server and binds an EGL display to it (`EGL_WL_bind_wayland_display`),
@@ -96,7 +101,7 @@ hooks:
 Not yet implemented:
 
 - Binding a view to its toplevel by activation token.
-- Per-surface dma-buf feedback (scanout tranches) and cursor shape.
+- Per-surface dma-buf feedback (scanout tranches).
 
 `ihs_wl_activation_token` exists but returns `IHS_WL_RESULT_ERR_UNSUPPORTED`
 for now.

@@ -34,7 +34,7 @@ const MAX_NUM_OF_PLANES: usize = 5;
 const GBM_BO_IMPORT_WL_BUFFER: u32 = 0x5501;
 const GBM_BO_USE_RENDERING: u32 = 1 << 2;
 /// drm_fourcc.h DRM_FORMAT_MOD_QCOM_COMPRESSED.
-pub const DRM_FORMAT_MOD_QCOM_COMPRESSED: u64 = (0x05 << 56) | 1;
+pub(crate) const DRM_FORMAT_MOD_QCOM_COMPRESSED: u64 = (0x05 << 56) | 1;
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
 type Perform = unsafe extern "C" fn(operation: c_int, ...) -> c_int;

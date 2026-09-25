@@ -4,6 +4,7 @@
 import 'dart:ffi' as ffi;
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 
@@ -38,6 +39,56 @@ final Map<int, int> _evdevByHid = <int, int>{
 /// The evdev code of [key], or null for a key Linux has none for.
 int? evdevCode(PhysicalKeyboardKey key) => _evdevByHid[key.usbHidUsage];
 
+/// What `ihs_wl_pointer` returns when the client hid the cursor
+/// (`IHS_WL_CURSOR_HIDDEN`).
+const int cursorHidden = 0x10000;
+
+/// Flutter's cursors by `wp_cursor_shape_device_v1.shape`.
+const Map<int, MouseCursor> _cursors = <int, MouseCursor>{
+  2: SystemMouseCursors.contextMenu,
+  3: SystemMouseCursors.help,
+  4: SystemMouseCursors.click,
+  5: SystemMouseCursors.progress,
+  6: SystemMouseCursors.wait,
+  7: SystemMouseCursors.cell,
+  8: SystemMouseCursors.precise,
+  9: SystemMouseCursors.text,
+  10: SystemMouseCursors.verticalText,
+  11: SystemMouseCursors.alias,
+  12: SystemMouseCursors.copy,
+  13: SystemMouseCursors.move,
+  14: SystemMouseCursors.noDrop,
+  15: SystemMouseCursors.forbidden,
+  16: SystemMouseCursors.grab,
+  17: SystemMouseCursors.grabbing,
+  18: SystemMouseCursors.resizeRight,
+  19: SystemMouseCursors.resizeUp,
+  20: SystemMouseCursors.resizeUpRight,
+  21: SystemMouseCursors.resizeUpLeft,
+  22: SystemMouseCursors.resizeDown,
+  23: SystemMouseCursors.resizeDownRight,
+  24: SystemMouseCursors.resizeDownLeft,
+  25: SystemMouseCursors.resizeLeft,
+  26: SystemMouseCursors.resizeLeftRight,
+  27: SystemMouseCursors.resizeUpDown,
+  28: SystemMouseCursors.resizeUpRightDownLeft,
+  29: SystemMouseCursors.resizeUpLeftDownRight,
+  30: SystemMouseCursors.resizeColumn,
+  31: SystemMouseCursors.resizeRow,
+  32: SystemMouseCursors.allScroll,
+  33: SystemMouseCursors.zoomIn,
+  34: SystemMouseCursors.zoomOut,
+  // dnd-ask and all-resize have no Flutter cursor of their own.
+  35: SystemMouseCursors.copy,
+  36: SystemMouseCursors.move,
+};
+
+/// The Flutter cursor for what `ihs_wl_pointer` returned: the arrow for the
+/// default shape, none asked for, or one Flutter has no cursor for.
+MouseCursor cursorFor(int shape) => shape == cursorHidden
+    ? SystemMouseCursors.none
+    : _cursors[shape] ?? SystemMouseCursors.basic;
+
 /// Feeds one view's input to the module. The event structs are allocated
 /// once and reused: input only ever comes from the UI thread, and the
 /// module copies each event before it returns.
@@ -60,6 +111,10 @@ class WaylandInput {
 
   /// Mouse buttons held, by Flutter device.
   final Map<int, int> _buttons = <int, int>{};
+
+  /// The cursor the client under the pointer asked for, as `ihs_wl_pointer`
+  /// returns it; see [cursorFor].
+  final ValueNotifier<int> cursor = ValueNotifier<int>(0);
 
   /// A pointer event the platform view received.
   void pointerEvent(int viewId, PointerEvent event) {
@@ -109,9 +164,11 @@ class WaylandInput {
     ev.axis_y = 0;
   }
 
-  /// The pointer left the view.
-  void leave(int viewId, PointerEvent event) =>
-      _sendPointer(viewId, IhsWlPointerKind.IHS_WL_POINTER_KIND_LEAVE, event);
+  /// The pointer left the view: whatever it asked for no longer applies.
+  void leave(int viewId, PointerEvent event) {
+    _sendPointer(viewId, IhsWlPointerKind.IHS_WL_POINTER_KIND_LEAVE, event);
+    cursor.value = 0;
+  }
 
   void _sendPointer(int viewId, IhsWlPointerKind kind, PointerEvent event) {
     final IhsWlPointerEvent ev = _pointer.ref;
@@ -119,7 +176,10 @@ class WaylandInput {
     ev.x = event.localPosition.dx;
     ev.y = event.localPosition.dy;
     ev.time_us = event.timeStamp.inMicroseconds;
-    _lib.ihs_wl_pointer(viewId, _pointer);
+    final int shape = _lib.ihs_wl_pointer(viewId, _pointer);
+    if (shape >= 0) {
+      cursor.value = shape;
+    }
   }
 
   void _touchEvent(int viewId, PointerEvent event) {

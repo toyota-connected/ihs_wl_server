@@ -38,7 +38,8 @@ fn pointer_event(kind: IhsWlPointerKind, x: f64, y: f64) -> IhsWlPointerEvent {
 }
 
 fn pointer(view: i32, ev: IhsWlPointerEvent) {
-    assert_eq!(unsafe { ihs_wl_pointer(view, &ev) }, 0);
+    // A cursor shape, never an error.
+    assert!(unsafe { ihs_wl_pointer(view, &ev) } >= 0);
 }
 
 fn motion(view: i32, x: f64, y: f64) {
