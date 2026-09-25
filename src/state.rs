@@ -182,8 +182,13 @@ impl State {
             clients: self.clients.clone(),
             gone: self.gone.clone(),
         });
-        if let Err(e) = self.dh.insert_client(stream, data) {
-            tracing::warn!("insert_client: {e}");
+        match self.dh.insert_client(stream, data) {
+            // Counted here: libwayland-server never calls `initialized`.
+            Ok(_) => {
+                let n = self.clients.fetch_add(1, Ordering::Relaxed) + 1;
+                observe::emit(Observed::ClientCount(n));
+            }
+            Err(e) => tracing::warn!("insert_client: {e}"),
         }
     }
 
@@ -406,17 +411,20 @@ pub struct ClientState {
 }
 
 impl ClientData for ClientState {
-    fn initialized(&self, _client_id: ClientId) {
-        let n = self.clients.fetch_add(1, Ordering::Relaxed) + 1;
-        observe::emit(Observed::ClientCount(n));
-    }
-
     fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
         self.gone
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(client_id);
-        let n = self.clients.fetch_sub(1, Ordering::Relaxed) - 1;
+        // Never below zero: a panic here, called from libwayland-server,
+        // would abort the shell.
+        let n = self
+            .clients
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            })
+            .unwrap_or(0)
+            .saturating_sub(1);
         observe::emit(Observed::ClientCount(n));
     }
 }
