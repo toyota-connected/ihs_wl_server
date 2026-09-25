@@ -235,7 +235,10 @@ impl State {
         view_id: i32,
         trees: &[crate::popups::Tree],
     ) -> Option<(u64, Vec<(u32, u64)>)> {
-        let built = tree::build(trees, &mut self.stager);
+        let built = tree::build(trees, &mut self.stager, &mut self.egl);
+        for id in self.egl.reap() {
+            self.retire_key(&BufferKey::Client(id));
+        }
         for uid in &built.retired {
             self.retire_key(&BufferKey::Staged(*uid));
         }

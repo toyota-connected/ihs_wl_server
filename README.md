@@ -70,6 +70,26 @@ Early development. Working today:
   keymap is xkbcommon's default, set by the `XKB_DEFAULT_*` variables, as
   the shell's own is.
 
+With the `egl-wl-display` cargo feature (off by default), the server runs on
+libwayland-server and binds an EGL display to it (`EGL_WL_bind_wayland_display`),
+for EGL implementations whose Wayland clients share buffers over a protocol of
+their own rather than linux-dmabuf. The EGL library serves that protocol; each
+buffer is turned into a dma-buf through libgbm and shown like any other. This
+needs a libgbm that can describe such buffers (one exporting `gbm_perform`, as
+[CodeLinaro libgbm](https://git.codelinaro.org/clo/le/display/libgbm) does), links
+libwayland-server, and loads libEGL at run time; there is still no EGL context.
+Some such implementations allocate compressed buffers by default, which can show
+corrupted when imported by the dma-buf alone: have the client's EGL share them
+uncompressed (the server logs a warning when it sees one). An app turns the
+feature on in its pubspec:
+
+```yaml
+hooks:
+  user_defines:
+    ihs_wayland_server:
+      cargo_features: [egl-wl-display]
+```
+
 Not yet implemented:
 
 - Binding a view to its toplevel by activation token.
