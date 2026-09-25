@@ -7,6 +7,8 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'server.dart';
+
 /// The platform-view type the module's factory registers.
 const String _viewType = 'ihs_wl/toplevel';
 
@@ -17,42 +19,140 @@ const String _viewType = 'ihs_wl/toplevel';
 /// toplevel with that app_id not already shown elsewhere. With neither, it
 /// is the oldest toplevel not shown elsewhere, whatever its app_id. Until a
 /// matching client maps, the view is empty.
-class WaylandToplevelView extends StatelessWidget {
-  const WaylandToplevelView({super.key, this.activationToken, this.appId});
+///
+/// Pointer and touch input over the view go to the client under it. The
+/// view takes keyboard focus when pressed and gives it up on a press
+/// anywhere else; while it has focus every key goes to the client.
+class WaylandToplevelView extends StatefulWidget {
+  const WaylandToplevelView({
+    super.key,
+    this.activationToken,
+    this.appId,
+    this.focusNode,
+    this.autofocus = false,
+  });
 
   final String? activationToken;
   final String? appId;
 
+  /// Keyboard focus for the client; one is made when null.
+  final FocusNode? focusNode;
+  final bool autofocus;
+
+  @override
+  State<WaylandToplevelView> createState() => _WaylandToplevelViewState();
+}
+
+class _WaylandToplevelViewState extends State<WaylandToplevelView> {
+  FocusNode? _ownFocus;
+  FocusNode get _focus =>
+      widget.focusNode ??
+      (_ownFocus ??= FocusNode(debugLabel: 'WaylandToplevelView'));
+
+  /// The platform-view id, once created.
+  int? _viewId;
+
+  @override
+  void dispose() {
+    _ownFocus?.dispose();
+    super.dispose();
+  }
+
+  void _created(int id) {
+    _viewId = id;
+    if (_focus.hasFocus) {
+      waylandInput?.focus(id, true);
+    }
+  }
+
+  void _focusChanged(bool focused) {
+    final int? id = _viewId;
+    if (id != null) {
+      waylandInput?.focus(id, focused);
+    }
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    final int? id = _viewId;
+    if (id == null || !(waylandInput?.key(id, event) ?? false)) {
+      return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  void _onSignal(PointerSignalEvent event) {
+    final int? id = _viewId;
+    if (id == null || event is! PointerScrollEvent) {
+      return;
+    }
+    GestureBinding.instance.pointerSignalResolver.register(event, (
+      PointerSignalEvent event,
+    ) {
+      waylandInput?.scroll(id, event as PointerScrollEvent);
+    });
+  }
+
+  void _onExit(PointerExitEvent event) {
+    final int? id = _viewId;
+    if (id != null) {
+      waylandInput?.leave(id, event);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final double dpr = MediaQuery.devicePixelRatioOf(context);
-    return PlatformViewLink(
-      viewType: _viewType,
-      surfaceFactory:
-          (BuildContext context, PlatformViewController controller) {
-            return PlatformViewSurface(
-              controller: controller,
-              gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{
-                Factory<OneSequenceGestureRecognizer>(
-                  EagerGestureRecognizer.new,
-                ),
+    return Focus(
+      focusNode: _focus,
+      autofocus: widget.autofocus,
+      onFocusChange: _focusChanged,
+      onKeyEvent: _onKey,
+      // A click elsewhere takes focus from the client, as a click off a
+      // window does, even where nothing there takes focus itself.
+      child: TapRegion(
+        onTapOutside: (_) => _focus.unfocus(),
+        child: MouseRegion(
+          onExit: _onExit,
+          child: Listener(
+            // Takes focus even before the surface is there to hit.
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (_) => _focus.requestFocus(),
+            onPointerSignal: _onSignal,
+            child: PlatformViewLink(
+              viewType: _viewType,
+              surfaceFactory:
+                  (BuildContext context, PlatformViewController controller) {
+                    return PlatformViewSurface(
+                      controller: controller,
+                      gestureRecognizers:
+                          const <Factory<OneSequenceGestureRecognizer>>{
+                            Factory<OneSequenceGestureRecognizer>(
+                              EagerGestureRecognizer.new,
+                            ),
+                          },
+                      hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+                    );
+                  },
+              onCreatePlatformView: (PlatformViewCreationParams params) {
+                // PlatformViewLink calls create(size:) once laid out, so the
+                // view is created at its real size rather than 0x0.
+                return _ToplevelViewController(
+                  id: params.id,
+                  creationParams: <String, Object?>{
+                    'token': widget.activationToken,
+                    'app_id': widget.appId,
+                    'dpr': dpr,
+                  },
+                  onCreated: (int id) {
+                    _created(id);
+                    params.onPlatformViewCreated(id);
+                  },
+                );
               },
-              hitTestBehavior: PlatformViewHitTestBehavior.opaque,
-            );
-          },
-      onCreatePlatformView: (PlatformViewCreationParams params) {
-        // PlatformViewLink calls create(size:) once laid out, so the view
-        // is created at its real size rather than 0x0.
-        return _ToplevelViewController(
-          id: params.id,
-          creationParams: <String, Object?>{
-            'token': activationToken,
-            'app_id': appId,
-            'dpr': dpr,
-          },
-          onCreated: params.onPlatformViewCreated,
-        );
-      },
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -102,10 +202,14 @@ class _ToplevelViewController extends PlatformViewController {
     onCreated(id);
   }
 
-  // Input is to go straight to the module over FFI (ihs_wl_pointer and
-  // friends), which do not accept events yet.
+  // Straight to the module over FFI: no platform channel, no platform
+  // thread hop.
   @override
-  Future<void> dispatchPointerEvent(PointerEvent event) async {}
+  Future<void> dispatchPointerEvent(PointerEvent event) async {
+    if (_created) {
+      waylandInput?.pointerEvent(id, event);
+    }
+  }
 
   @override
   Future<void> clearFocus() async {}

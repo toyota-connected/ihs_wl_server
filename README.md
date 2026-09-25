@@ -52,15 +52,22 @@ Early development. Working today:
   commit with a target time is applied one refresh ahead of the first vblank
   at or after it. For views off screen, a clock at the display's refresh
   stands in for the reports.
+- Pointer, touch and keyboard input go straight from the Dart view to the
+  module over FFI, in view-local logical pixels. What is under a point is
+  hit-tested against the tree the view shows, input regions included. The
+  view takes keyboard focus when pressed; keys are sent as evdev codes and
+  clients repeat them from `wl_keyboard.repeat_info` (600 ms, 25 Hz). The
+  keymap is xkbcommon's default, set by the `XKB_DEFAULT_*` variables, as
+  the shell's own is.
 
 Not yet implemented:
 
-- Input: pointer, touch and keyboard.
 - Binding a view to its toplevel by activation token.
-- Per-surface dma-buf feedback (scanout tranches) and fractional scale.
+- Per-surface dma-buf feedback (scanout tranches), fractional scale, cursor
+  shape and popups.
 
-The C entry points for input and activation tokens exist. For now they return
-`IHS_WL_RESULT_ERR_UNSUPPORTED`.
+`ihs_wl_activation_token` exists but returns `IHS_WL_RESULT_ERR_UNSUPPORTED`
+for now.
 
 ## Layout
 

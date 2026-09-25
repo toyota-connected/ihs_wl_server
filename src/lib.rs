@@ -22,6 +22,7 @@ mod error;
 #[doc(hidden)]
 pub mod ffi;
 mod handlers;
+mod input;
 mod log;
 mod nodes;
 #[doc(hidden)]
@@ -83,6 +84,7 @@ pub enum IhsWlPointerKind {
 
 /// Pointer input, in view-local logical pixels.
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct IhsWlPointerEvent {
     pub struct_size: usize,
     /// `IhsWlPointerKind`.
@@ -117,6 +119,7 @@ pub enum IhsWlTouchKind {
 
 /// Touch input, in view-local logical pixels.
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct IhsWlTouchEvent {
     pub struct_size: usize,
     /// `IhsWlTouchKind`.
@@ -151,7 +154,11 @@ fn guard(name: &str, f: impl FnOnce() -> Result<c_int>) -> c_int {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(Ok(rc)) => rc,
         Ok(Err(e)) => {
-            if e.code != IhsWlResult::ErrAlreadyRunning as c_int {
+            // Neither is worth a line per call: a hot restart starts again,
+            // and a view may send input after a stop.
+            if e.code != IhsWlResult::ErrAlreadyRunning as c_int
+                && e.code != IhsWlResult::ErrNotRunning as c_int
+            {
                 tracing::warn!("{name}: {}", e.message);
             }
             set_last_error(&e.message);
@@ -243,15 +250,27 @@ pub unsafe extern "C" fn ihs_wl_activation_token(out: *mut c_char, cap: usize) -
 }
 
 /// Pointer input for the view `view_id`. Any thread; only enqueues. Returns
-/// the client's cursor shape (`wp_cursor_shape_device_v1.shape`, 0 = none)
-/// or a negative error.
+/// the client's cursor shape (`wp_cursor_shape_device_v1.shape`), 0 while
+/// none is known, or a negative error.
 ///
 /// # Safety
 /// `ev` must point to a readable `IhsWlPointerEvent`.
 #[no_mangle]
 pub unsafe extern "C" fn ihs_wl_pointer(view_id: i32, ev: *const IhsWlPointerEvent) -> c_int {
-    let _ = (view_id, ev);
-    unsupported("ihs_wl_pointer")
+    guard("ihs_wl_pointer", || {
+        let event = *sized("event", ev)?;
+        if event.kind > IhsWlPointerKind::Axis as u32 {
+            return Err(Error::invalid(format!("bad pointer kind {}", event.kind)));
+        }
+        if ![event.x, event.y, event.axis_x, event.axis_y]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return Err(Error::invalid("pointer event is not finite"));
+        }
+        thread::send(thread::Cmd::Pointer { view_id, event })?;
+        Ok(0)
+    })
 }
 
 /// Touch input for the view `view_id`. Any thread; only enqueues.
@@ -260,23 +279,50 @@ pub unsafe extern "C" fn ihs_wl_pointer(view_id: i32, ev: *const IhsWlPointerEve
 /// `ev` must point to a readable `IhsWlTouchEvent`.
 #[no_mangle]
 pub unsafe extern "C" fn ihs_wl_touch(view_id: i32, ev: *const IhsWlTouchEvent) -> c_int {
-    let _ = (view_id, ev);
-    unsupported("ihs_wl_touch")
+    guard("ihs_wl_touch", || {
+        let event = *sized("event", ev)?;
+        if event.kind > IhsWlTouchKind::Frame as u32 {
+            return Err(Error::invalid(format!("bad touch kind {}", event.kind)));
+        }
+        if event.slot < 0 || !event.x.is_finite() || !event.y.is_finite() {
+            return Err(Error::invalid("bad touch slot or position"));
+        }
+        thread::send(thread::Cmd::Touch { view_id, event })?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
 }
 
 /// A key press (`pressed` = 1) or release for the view `view_id`, as an evdev
-/// code. Any thread; only enqueues.
+/// code. Any thread; only enqueues. Goes to the client only while the view
+/// has keyboard focus.
 #[no_mangle]
 pub extern "C" fn ihs_wl_key(view_id: i32, evdev: u32, pressed: u32, time_us: u64) -> c_int {
-    let _ = (view_id, evdev, pressed, time_us);
-    unsupported("ihs_wl_key")
+    guard("ihs_wl_key", || {
+        if evdev > input::KEY_MAX {
+            return Err(Error::invalid(format!("bad evdev code {evdev}")));
+        }
+        thread::send(thread::Cmd::Key {
+            view_id,
+            evdev,
+            pressed: pressed != 0,
+            time_us,
+        })?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
 }
 
-/// Give (`focused` = 1) or take keyboard focus for the view `view_id`.
+/// Give (`focused` = 1) or take keyboard focus for the view `view_id`. Any
+/// thread; only enqueues. Taking it from a view that does not have it is a
+/// no-op.
 #[no_mangle]
 pub extern "C" fn ihs_wl_focus(view_id: i32, focused: u32) -> c_int {
-    let _ = (view_id, focused);
-    unsupported("ihs_wl_focus")
+    guard("ihs_wl_focus", || {
+        thread::send(thread::Cmd::Focus {
+            view_id,
+            focused: focused != 0,
+        })?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
 }
 
 /// The message for the last failed call on this thread; never NULL, empty

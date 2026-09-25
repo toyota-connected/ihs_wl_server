@@ -59,9 +59,12 @@ pub struct State {
     pub syncobj_state: Option<DrmSyncobjState>,
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
-    /// Input attaches its pointer/touch/keyboard capabilities here.
+    /// Kept alive for the global's lifetime.
     #[allow(dead_code)]
     pub seat: Seat<Self>,
+    pub devices: crate::input::Devices,
+    /// The view Dart last gave keyboard focus to.
+    pub focused_view: Option<i32>,
     /// Owns the xdg-output global.
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
@@ -121,7 +124,8 @@ impl State {
         caps: &Caps,
     ) -> Self {
         let mut seat_state = SeatState::new();
-        let seat = seat_state.new_wl_seat(&dh, "seat0");
+        let mut seat = seat_state.new_wl_seat(&dh, "seat0");
+        let devices = crate::input::Devices::add(&mut seat);
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_global = crate::handlers::dmabuf::global(&mut dmabuf_state, &dh, caps);
         State {
@@ -140,6 +144,8 @@ impl State {
             data_device_state: DataDeviceState::new::<Self>(&dh),
             seat_state,
             seat,
+            devices,
+            focused_view: None,
             output_manager_state: OutputManagerState::new_with_xdg_output::<Self>(&dh),
             output: crate::handlers::output::virtual_output(&dh),
             dh,
@@ -219,6 +225,9 @@ impl State {
                 self.unbind_view(id);
                 self.views.remove(&id);
                 self.buffers.forget_view(id);
+                if self.focused_view == Some(id) {
+                    self.focused_view = None;
+                }
             }
             Cmd::ViewResized {
                 view_id,
@@ -231,7 +240,19 @@ impl State {
                 self.configure_view(view_id);
             }
             Cmd::Presented { view_id, report } => self.frame_presented(view_id, report),
-            Cmd::ViewSuspended { view_id, suspended } => self.view_suspended(view_id, suspended),
+            Cmd::ViewSuspended { view_id, suspended } => {
+                self.view_suspended(view_id, suspended);
+                self.refresh_keyboard_focus();
+            }
+            Cmd::Pointer { view_id, event } => self.pointer_input(view_id, event),
+            Cmd::Touch { view_id, event } => self.touch_input(view_id, event),
+            Cmd::Key {
+                view_id,
+                evdev,
+                pressed,
+                time_us,
+            } => self.key_input(view_id, evdev, pressed, time_us),
+            Cmd::Focus { view_id, focused } => self.focus_input(view_id, focused),
         }
     }
 
@@ -273,6 +294,7 @@ impl State {
             toplevel_id,
         });
         self.configure_view(view_id);
+        self.refresh_keyboard_focus();
         // Show what the toplevel already has; a static client may never
         // commit again.
         self.submit_view(view_id);
@@ -307,6 +329,7 @@ impl State {
             }
             tracing::info!(view_id, toplevel_id, "view unbound");
         }
+        self.refresh_keyboard_focus();
     }
 
     /// The toplevel is going away: its view shows nothing new until it binds

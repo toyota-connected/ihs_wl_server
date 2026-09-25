@@ -209,8 +209,8 @@ int ihs_wl_activation_token(char *out, size_t cap);
 
 /*
  Pointer input for the view `view_id`. Any thread; only enqueues. Returns
- the client's cursor shape (`wp_cursor_shape_device_v1.shape`, 0 = none)
- or a negative error.
+ the client's cursor shape (`wp_cursor_shape_device_v1.shape`), 0 while
+ none is known, or a negative error.
 
  # Safety
  `ev` must point to a readable `IhsWlPointerEvent`.
@@ -227,12 +227,15 @@ int ihs_wl_touch(int32_t view_id, const struct IhsWlTouchEvent *ev);
 
 /*
  A key press (`pressed` = 1) or release for the view `view_id`, as an evdev
- code. Any thread; only enqueues.
+ code. Any thread; only enqueues. Goes to the client only while the view
+ has keyboard focus.
  */
 int ihs_wl_key(int32_t view_id, uint32_t evdev, uint32_t pressed, uint64_t time_us);
 
 /*
- Give (`focused` = 1) or take keyboard focus for the view `view_id`.
+ Give (`focused` = 1) or take keyboard focus for the view `view_id`. Any
+ thread; only enqueues. Taking it from a view that does not have it is a
+ no-op.
  */
 int ihs_wl_focus(int32_t view_id, uint32_t focused);
 
