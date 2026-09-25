@@ -163,7 +163,12 @@ fn close_frame(frame: &sys::IhsFrame) {
     }
 }
 
-fn layer_for(spec: &LayerSpec, frame: &sys::IhsFrame) -> sys::IhsLayer {
+/// @p v, a logical coordinate, in physical pixels.
+fn physical(v: i32, dpr: f64) -> i64 {
+    (v as f64 * dpr).round() as i64
+}
+
+fn layer_for(spec: &LayerSpec, frame: &sys::IhsFrame, dpr: f64) -> sys::IhsLayer {
     let clamp_i = |v: i64| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let clamp_u = |v: i64| v.clamp(0, u32::MAX as i64) as u32;
     sys::IhsLayer {
@@ -176,10 +181,15 @@ fn layer_for(spec: &LayerSpec, frame: &sys::IhsFrame) -> sys::IhsLayer {
         src_y: clamp_i(fixed(spec.src.loc.y)),
         src_w: clamp_u(fixed(spec.src.size.w)),
         src_h: clamp_u(fixed(spec.src.size.h)),
-        dst_x: spec.dst.loc.x,
-        dst_y: spec.dst.loc.y,
-        dst_w: spec.dst.size.w.max(0) as u32,
-        dst_h: spec.dst.size.h.max(0) as u32,
+        // Edges round, not sizes, so neighbors stay flush.
+        dst_x: clamp_i(physical(spec.dst.loc.x, dpr)),
+        dst_y: clamp_i(physical(spec.dst.loc.y, dpr)),
+        dst_w: clamp_u(
+            physical(spec.dst.loc.x + spec.dst.size.w, dpr) - physical(spec.dst.loc.x, dpr),
+        ),
+        dst_h: clamp_u(
+            physical(spec.dst.loc.y + spec.dst.size.h, dpr) - physical(spec.dst.loc.y, dpr),
+        ),
         transform: spec.transform,
         opaque: spec.opaque as u8,
         content_type: 0,
@@ -198,6 +208,8 @@ impl State {
             return;
         };
         let root = toplevel.surface.wl_surface().clone();
+        // Surfaces new to the tree learn its scale.
+        self.scale_tree(view_id);
         let taken = Taken::from_tree(&root);
         let Some((seq, shown)) = self.submit_tree(view_id, &root) else {
             self.hold_loose(root.client(), taken.not_shown());
@@ -258,10 +270,11 @@ impl State {
         }
         // Built after every frame is in place: the layers point into
         // `frames`, which must not move again.
+        let dpr = self.views.get(&view_id).map_or(1.0, |v| v.dpr);
         let layers: Vec<sys::IhsLayer> = specs
             .iter()
             .zip(frames.iter())
-            .map(|(spec, frame)| layer_for(spec, frame))
+            .map(|(spec, frame)| layer_for(spec, frame, dpr))
             .collect();
         let mut release = vec![-1; layers.len()];
 

@@ -24,6 +24,9 @@ use wayland_protocols::wp::commit_timing::v1::client::{
     wp_commit_timer_v1, wp_commit_timing_manager_v1,
 };
 use wayland_protocols::wp::fifo::v1::client::{wp_fifo_manager_v1, wp_fifo_v1};
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
+};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1, zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
 };
@@ -32,6 +35,7 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
     wp_linux_drm_syncobj_timeline_v1,
 };
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 #[derive(Default)]
@@ -65,6 +69,15 @@ struct App {
     touch: Option<wl_touch::WlTouch>,
     /// Input events, in arrival order.
     input: Vec<Input>,
+    fractional_manager: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
+    /// The toplevel surface's last wp_fractional_scale_v1.preferred_scale.
+    preferred_scale: Option<u32>,
+    /// The toplevel surface's last wl_surface.preferred_buffer_scale.
+    buffer_scale: Option<i32>,
+    /// wl_surface.enter events, by surface protocol id.
+    entered: HashMap<u32, u32>,
+    toplevel_surface: u32,
 }
 
 /// A seat event, with the surface it names as its protocol id.
@@ -154,6 +167,8 @@ pub struct Client {
     _surface: Option<wl_surface::WlSurface>,
     _toplevel: Option<xdg_toplevel::XdgToplevel>,
     xdg: Option<xdg_surface::XdgSurface>,
+    fractional: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    viewport: Option<wp_viewport::WpViewport>,
     /// dma-buf buffers, by index, and the memfds behind them.
     buffers: Vec<Option<(wl_buffer::WlBuffer, File)>>,
     sub_surface: Option<(wl_surface::WlSurface, wl_subsurface::WlSubsurface)>,
@@ -181,6 +196,8 @@ impl Client {
             _surface: None,
             _toplevel: None,
             xdg: None,
+            fractional: None,
+            viewport: None,
             buffers: Vec::new(),
             sub_surface: None,
             fifo: None,
@@ -233,6 +250,7 @@ impl Client {
         surface.damage_buffer(0, 0, width, height);
         surface.commit();
         self.queue.roundtrip(&mut self.app).unwrap();
+        self.app.toplevel_surface = surface.id().protocol_id();
         self._surface = Some(surface);
         self._toplevel = Some(toplevel);
         self.xdg = Some(xdg);
@@ -264,6 +282,7 @@ impl Client {
         while !self.app.configured {
             self.queue.blocking_dispatch(&mut self.app).unwrap();
         }
+        self.app.toplevel_surface = surface.id().protocol_id();
         self._surface = Some(surface);
         self._toplevel = Some(toplevel);
         self.xdg = Some(xdg);
@@ -500,6 +519,18 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.timing_manager = Some(registry.bind(name, 1, qh, ()))
                 }
                 "wl_seat" => app.seat = Some(registry.bind(name, version.min(9), qh, ())),
+                "wp_fractional_scale_manager_v1" => {
+                    app.fractional_manager = Some(registry.bind(name, 1, qh, ()))
+                }
+                "wp_viewporter" => app.viewporter = Some(registry.bind(name, 1, qh, ())),
+                "wl_output" => {
+                    registry.bind::<wayland_client::protocol::wl_output::WlOutput, _, _>(
+                        name,
+                        version.min(4),
+                        qh,
+                        (),
+                    );
+                }
                 _ => {}
             }
             app.globals.push(interface);
@@ -539,7 +570,49 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for App {
 }
 
 delegate_noop!(App: ignore wl_compositor::WlCompositor);
-delegate_noop!(App: ignore wl_surface::WlSurface);
+delegate_noop!(App: ignore wayland_client::protocol::wl_output::WlOutput);
+delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
+delegate_noop!(App: ignore wp_viewporter::WpViewporter);
+delegate_noop!(App: ignore wp_viewport::WpViewport);
+
+impl Dispatch<wl_surface::WlSurface, ()> for App {
+    fn event(
+        app: &mut Self,
+        surface: &wl_surface::WlSurface,
+        event: wl_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_surface::Event::Enter { .. } => {
+                *app.entered.entry(surface.id().protocol_id()).or_default() += 1;
+            }
+            // Only the toplevel's is kept: the one the tests ask after.
+            wl_surface::Event::PreferredBufferScale { factor }
+                if surface.id().protocol_id() == app.toplevel_surface =>
+            {
+                app.buffer_scale = Some(factor);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wp_fractional_scale_v1::WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            app.preferred_scale = Some(scale);
+        }
+    }
+}
 delegate_noop!(App: ignore wl_shm::WlShm);
 delegate_noop!(App: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(App: ignore wl_buffer::WlBuffer);
@@ -988,5 +1061,50 @@ impl Dispatch<wl_touch::WlTouch, ()> for App {
             _ => return,
         };
         app.input.push(input);
+    }
+}
+
+impl Client {
+    /// Ask for the toplevel surface's fractional scale.
+    pub fn use_fractional_scale(&mut self) {
+        let qh = self.queue.handle();
+        let manager = self
+            .app
+            .fractional_manager
+            .as_ref()
+            .expect("no wp_fractional_scale_manager_v1");
+        self.fractional =
+            Some(manager.get_fractional_scale(self._surface.as_ref().unwrap(), &qh, ()));
+        self.roundtrip();
+    }
+
+    /// The last preferred scale, in 120ths.
+    pub fn preferred_scale(&self) -> Option<u32> {
+        self.app.preferred_scale
+    }
+
+    /// The toplevel surface's last preferred buffer scale.
+    pub fn buffer_scale(&self) -> Option<i32> {
+        self.app.buffer_scale
+    }
+
+    /// wl_surface.enter events the surface has had.
+    pub fn entered(&self, sub: bool) -> u32 {
+        let id = self.surface_id(sub);
+        self.app.entered.get(&id).copied().unwrap_or(0)
+    }
+
+    /// Show the toplevel at @p width x @p height logical pixels from its next
+    /// commit on, whatever its buffer's size.
+    pub fn set_viewport_destination(&mut self, width: i32, height: i32) {
+        if self.viewport.is_none() {
+            let qh = self.queue.handle();
+            let viewporter = self.app.viewporter.as_ref().expect("no wp_viewporter");
+            self.viewport = Some(viewporter.get_viewport(self._surface.as_ref().unwrap(), &qh, ()));
+        }
+        self.viewport
+            .as_ref()
+            .unwrap()
+            .set_destination(width, height);
     }
 }

@@ -14,8 +14,8 @@ impl OutputHandler for State {}
 delegate_output!(State);
 
 /// The one virtual output clients see. Clients refuse to start without a
-/// `wl_output` (foot: "no monitors available"). Its mode and scale follow the
-/// bound view once views carry a scale; until then it is a nominal 1080p60.
+/// `wl_output` (foot: "no monitors available"). Its scale is the last view's
+/// device pixel ratio; its mode a nominal 1080p60.
 pub fn virtual_output(dh: &DisplayHandle) -> Output {
     let output = Output::new(
         "ihs-0".into(),
