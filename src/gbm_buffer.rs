@@ -19,6 +19,7 @@
 //! The global is only offered when the loaded libgbm is one that can import
 //! such buffers: it exports `gbm_perform`, which Mesa's does not.
 
+use std::collections::HashSet;
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
 
@@ -91,6 +92,9 @@ pub fn importer() -> Option<Arc<dyn Import>> {
 /// State of the global.
 pub struct GbmBufferState {
     import: Arc<dyn Import>,
+    /// (format, modifier) pairs already warned about: once each, not once
+    /// per buffer.
+    warned: HashSet<(u32, u64)>,
 }
 
 impl GbmBufferState {
@@ -99,7 +103,10 @@ impl GbmBufferState {
         let import = importer()?;
         dh.create_global::<State, GbmBufferBackend, ()>(1, ());
         tracing::info!("gbm_buffer_backend offered");
-        Some(GbmBufferState { import })
+        Some(GbmBufferState {
+            import,
+            warned: HashSet::new(),
+        })
     }
 }
 
@@ -170,18 +177,23 @@ impl Dispatch<GbmBufferParams, Params> for State {
             params.failed();
             return;
         }
-        let Some(gbm) = state.gbm_buffer.as_ref() else {
+        let Some(gbm) = state.gbm_buffer.as_mut() else {
             params.failed();
             return;
         };
         match import(&*gbm.import, fd, meta_fd, width, height, format, flags) {
             Ok(dmabuf) => {
-                if !state.caps.accepts(format, dmabuf.format().modifier.into()) {
-                    tracing::warn!(
-                        format,
-                        modifier = u64::from(dmabuf.format().modifier),
-                        "gbm buffer the shell does not list as importable"
-                    );
+                let modifier = u64::from(dmabuf.format().modifier);
+                if !state.caps.accepts(format, modifier) {
+                    if gbm.warned.insert((format, modifier)) {
+                        tracing::warn!(
+                            format,
+                            modifier,
+                            "gbm buffer the shell does not list as importable"
+                        );
+                    } else {
+                        tracing::debug!(format, modifier, "gbm buffer not listed as importable");
+                    }
                 }
                 match client.create_resource::<WlBuffer, Dmabuf, State>(dh, 1, dmabuf) {
                     Ok(buffer) => params.created(&buffer),
