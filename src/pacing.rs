@@ -132,24 +132,54 @@ impl State {
         let Some(entry) = self.views.get_mut(&view_id) else {
             return;
         };
-        if suspended && entry.frames.next_stale().is_some() {
-            self.schedule_tick(self.clock.next_vblank(now_ns()));
+        if suspended {
+            if entry.frames.next_stale(false).is_some() {
+                self.schedule_tick(self.clock.next_vblank(now_ns()));
+            }
+        } else if let Some(at) = entry.frames.next_stale(true) {
+            // Back on screen: the shell has as long to report what it holds
+            // as for a frame just submitted.
+            self.schedule_tick(at.max(now_ns() + timing::STALE_NS));
         }
     }
 
-    /// A frame of @p view_id holding barriers was submitted: make sure they
-    /// clear even if it is never reported.
+    /// A frame of @p view_id was submitted: make sure its barriers clear and
+    /// its frame callbacks are sent even if it is never reported.
     pub fn watch_frames(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
         };
         let at = if entry.suspended {
-            Some(self.clock.next_vblank(now_ns()))
+            entry
+                .frames
+                .next_stale(false)
+                .map(|_| self.clock.next_vblank(now_ns()))
         } else {
-            entry.frames.next_stale()
+            entry.frames.next_stale(true)
         };
         if let Some(at) = at {
             self.schedule_tick(at);
+        }
+    }
+
+    /// A frame of @p view_id could not be submitted: its frame callbacks go
+    /// at the next refresh, as if it had been shown.
+    pub fn unsubmitted(&mut self, view_id: i32) {
+        let due_ns = self.clock.next_vblank(now_ns());
+        if !self.unsubmitted.iter().any(|&(id, _)| id == view_id) {
+            self.unsubmitted.push((view_id, due_ns));
+        }
+        self.schedule_tick(due_ns);
+    }
+
+    /// Send the frame callbacks of the trees @p view_id shows, unless it is
+    /// off screen, where they wait for it to be shown.
+    fn flush_callbacks(&self, view_id: i32, now: u64) {
+        if self.views.get(&view_id).is_none_or(|v| v.suspended) {
+            return;
+        }
+        for (root, _) in self.view_trees(view_id) {
+            crate::submit::send_frame_callbacks(&root, now);
         }
     }
 
@@ -238,6 +268,18 @@ impl State {
             }
         });
 
+        // Views whose frame could not be submitted.
+        let mut flush: Vec<i32> = Vec::new();
+        self.unsubmitted.retain(|&(view_id, due_ns)| {
+            if due_ns <= now {
+                flush.push(view_id);
+                false
+            } else {
+                wake(due_ns);
+                true
+            }
+        });
+
         // Frames that went unreported.
         let stale_before = now.saturating_sub(timing::STALE_NS);
         let mut released_views = Vec::new();
@@ -245,14 +287,21 @@ impl State {
             let released = if entry.suspended {
                 entry.frames.release_all()
             } else {
+                if entry.frames.flush_older(stale_before) && !flush.contains(&view_id) {
+                    tracing::debug!(view_id, "frame unreported; sending its frame callbacks");
+                    flush.push(view_id);
+                }
                 entry.frames.release_older(stale_before)
             };
             if released {
                 released_views.push(view_id);
             }
-            if let Some(at) = entry.frames.next_stale() {
+            if let Some(at) = entry.frames.next_stale(!entry.suspended) {
                 wake(if entry.suspended { vblank } else { at });
             }
+        }
+        for view_id in flush {
+            self.flush_callbacks(view_id, now);
         }
         clients.extend(
             released_views
@@ -288,10 +337,16 @@ impl State {
             }
         }
         let views: Vec<i32> = self.views.keys().copied().collect();
-        for view_id in views {
-            if self.views.get_mut(&view_id).unwrap().frames.release_all() {
-                clients.extend(self.view_client(view_id));
+        for view_id in &views {
+            if self.views.get_mut(view_id).unwrap().frames.release_all() {
+                clients.extend(self.view_client(*view_id));
             }
+        }
+        // And every frame callback of a view on screen.
+        self.unsubmitted.clear();
+        let now = now_ns();
+        for view_id in views {
+            self.flush_callbacks(view_id, now);
         }
         unblock_all(self, clients);
     }

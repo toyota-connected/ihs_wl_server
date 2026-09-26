@@ -135,6 +135,8 @@ struct Registry {
     fences: Vec<(u32, OwnedFd)>,
     /// Read the pixel at (x, y) of each submitted buffer.
     probe: Option<(u32, u32)>,
+    /// Refuse every submission, as a shell that cannot take the frame.
+    refuse: bool,
     /// What query_capabilities reports as the render device.
     render_device: u64,
 }
@@ -257,6 +259,13 @@ unsafe extern "C" fn submit_layers(
     } else {
         std::slice::from_raw_parts(layers, count)
     };
+    if with(|r| r.refuse) {
+        // Its fds are consumed whatever the answer.
+        for l in layers.iter().filter(|l| !l.frame.is_null()) {
+            consume_frame(&*l.frame);
+        }
+        return sys::IHS_PV_ERR_INVALID;
+    }
     let mut recorded = Vec::new();
     for (i, l) in layers.iter().enumerate() {
         let f = &*l.frame;
@@ -452,6 +461,11 @@ pub fn set_probe(at: Option<(u32, u32)>) {
 }
 
 /// Hand back an eventfd per layer as its release fence from now on.
+/// Refuse (true) or take every submission from now on.
+pub fn set_refuse(refuse: bool) {
+    with(|r| r.refuse = refuse);
+}
+
 pub fn set_fenced(fenced: bool) {
     with(|r| r.fenced = fenced);
 }

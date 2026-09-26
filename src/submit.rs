@@ -279,18 +279,16 @@ impl State {
         let taken = Taken::from_trees(trees.iter().map(|(s, _)| s));
         let Some((seq, shown)) = self.submit_tree(view_id, &trees) else {
             self.hold_loose(root.client(), taken.not_shown());
+            self.unsubmitted(view_id);
             return;
         };
-        let has_barriers = taken.has_barriers();
         let entry = self.views.get_mut(&view_id).unwrap();
         if entry.frames.push(seq, shown, taken) {
             if let Some(client) = root.client() {
                 self.unblock(&client);
             }
         }
-        if has_barriers {
-            self.watch_frames(view_id);
-        }
+        self.watch_frames(view_id);
     }
 
     /// Submit the layers of the scene @p trees; the seq it went as, and the
