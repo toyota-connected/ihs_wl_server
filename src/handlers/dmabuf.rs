@@ -4,9 +4,10 @@
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::delegate_dmabuf;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::dmabuf::{
-    DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
+    DmabufFeedback, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
 };
 
 use crate::caps::{Caps, FormatModifier};
@@ -31,18 +32,24 @@ pub fn formats(offered: &[FormatModifier]) -> Vec<Format> {
 /// allocates on the GPU the shell imports on, and Mesa's Wayland EGL -- which
 /// finds its device through that feedback (or wl_drm, which is not offered) --
 /// renders on the GPU instead of falling back to software. Without it, v3.
-pub fn global(state: &mut DmabufState, dh: &DisplayHandle, caps: &Caps) -> DmabufGlobal {
+/// Returns the global and its default feedback, if any.
+pub fn global(
+    state: &mut DmabufState,
+    dh: &DisplayHandle,
+    caps: &Caps,
+) -> (DmabufGlobal, Option<DmabufFeedback>) {
     let offered = formats(&caps.formats);
     if let Some(device) = caps.render_device {
         match DmabufFeedbackBuilder::new(device as libc::dev_t, offered.clone()).build() {
             Ok(feedback) => {
                 tracing::info!(device, "dma-buf feedback: main device");
-                return state.create_global_with_default_feedback::<State>(dh, &feedback);
+                let global = state.create_global_with_default_feedback::<State>(dh, &feedback);
+                return (global, Some(feedback));
             }
             Err(e) => tracing::warn!("dma-buf feedback: {e}; offering v3"),
         }
     }
-    state.create_global::<State>(dh, offered)
+    (state.create_global::<State>(dh, offered), None)
 }
 
 impl DmabufHandler for State {
@@ -60,6 +67,15 @@ impl DmabufHandler for State {
         // global only offers what the shell imports, and the shell is where
         // the buffer is used.
         let _ = notifier.successful::<State>();
+    }
+
+    // A surface asking after the shell hinted its layer gets the tranche.
+    fn new_surface_feedback(
+        &mut self,
+        surface: &WlSurface,
+        _global: &DmabufGlobal,
+    ) -> Option<DmabufFeedback> {
+        self.hinted_feedback(surface)
     }
 }
 

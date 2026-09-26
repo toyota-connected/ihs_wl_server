@@ -52,6 +52,10 @@ struct App {
     dmabuf_version: u32,
     /// Default feedback's main_device, once its done arrived.
     main_device: Option<u64>,
+    /// The toplevel surface's dma-buf feedback: its tranches, as of each
+    /// done, and the one being received.
+    surface_feedback: Vec<Vec<Tranche>>,
+    pending_surface_feedback: SurfaceFeedback,
     pending_main_device: Option<u64>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     globals: Vec<String>,
@@ -160,6 +164,27 @@ pub enum Input {
     TouchFrame,
     TouchCancel,
 }
+
+/// A dma-buf feedback tranche: target device, scanout flag, and its
+/// (fourcc, modifier) pairs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tranche {
+    pub device: u64,
+    pub scanout: bool,
+    pub formats: Vec<(u32, u64)>,
+}
+
+/// A surface feedback being received.
+#[derive(Default)]
+struct SurfaceFeedback {
+    table: Vec<(u32, u64)>,
+    tranches: Vec<Tranche>,
+    tranche: Option<Tranche>,
+    indices: Vec<u16>,
+}
+
+/// Marks a surface's feedback object, as opposed to the default one.
+struct OfSurface;
 
 /// What a wp_presentation_feedback came to.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -815,6 +840,32 @@ impl Client {
         self.app.main_device
     }
 
+    /// Ask for the toplevel surface's dma-buf feedback (v4 only).
+    pub fn request_surface_feedback(&mut self) {
+        let qh = self.queue.handle();
+        let surface = self._surface.as_ref().unwrap();
+        self.app
+            .dmabuf
+            .as_ref()
+            .unwrap()
+            .get_surface_feedback(surface, &qh, OfSurface);
+    }
+
+    /// Dispatch until the surface feedback has been sent @p count times;
+    /// the tranches of the last.
+    pub fn wait_surface_feedback(&mut self, count: usize) -> Vec<Tranche> {
+        self.dispatch_until("surface feedback", |c| {
+            c.app.surface_feedback.len() >= count
+        });
+        self.app.surface_feedback[count - 1].clone()
+    }
+
+    /// How many times the surface feedback has been sent so far.
+    pub fn surface_feedback_count(&mut self) -> usize {
+        self.roundtrip();
+        self.app.surface_feedback.len()
+    }
+
     /// True once the server has gone away.
     pub fn roundtrip_fails(&mut self) -> bool {
         self.queue.roundtrip(&mut self.app).is_err()
@@ -902,6 +953,75 @@ impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, ()> for Ap
             _ => {}
         }
     }
+}
+
+impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1, OfSurface> for App {
+    fn event(
+        app: &mut Self,
+        _: &zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _: &OfSurface,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwp_linux_dmabuf_feedback_v1::{Event, TrancheFlags};
+        let fb = &mut app.pending_surface_feedback;
+        match event {
+            Event::FormatTable { fd, size } => fb.table = read_format_table(fd, size),
+            Event::TrancheTargetDevice { device } => {
+                let mut dev = [0u8; 8];
+                let n = device.len().min(8);
+                dev[..n].copy_from_slice(&device[..n]);
+                fb.tranche = Some(Tranche {
+                    device: u64::from_ne_bytes(dev),
+                    scanout: false,
+                    formats: Vec::new(),
+                });
+            }
+            Event::TrancheFlags { flags } => {
+                let scanout = matches!(flags, wayland_client::WEnum::Value(f) if f.contains(TrancheFlags::Scanout));
+                fb.tranche.as_mut().expect("flags before target").scanout = scanout;
+            }
+            Event::TrancheFormats { indices } => {
+                fb.indices.extend(
+                    indices
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| u16::from_ne_bytes(*b)),
+                );
+            }
+            Event::TrancheDone => {
+                let mut tranche = fb.tranche.take().expect("tranche_done alone");
+                tranche.formats = fb.indices.drain(..).map(|i| fb.table[i as usize]).collect();
+                fb.tranches.push(tranche);
+            }
+            Event::Done => {
+                let tranches = std::mem::take(&mut fb.tranches);
+                app.surface_feedback.push(tranches);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A feedback format table: 16-byte (fourcc, pad, modifier) entries.
+fn read_format_table(fd: std::os::fd::OwnedFd, size: u32) -> Vec<(u32, u64)> {
+    use std::os::unix::fs::FileExt;
+    // The same open file each time it is sent: read at 0, not at its offset.
+    let mut bytes = vec![0u8; size as usize];
+    File::from(fd).read_exact_at(&mut bytes, 0).unwrap();
+    bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|e| {
+            (
+                u32::from_ne_bytes(e[0..4].try_into().unwrap()),
+                u64::from_ne_bytes(e[8..16].try_into().unwrap()),
+            )
+        })
+        .collect()
 }
 
 impl Client {

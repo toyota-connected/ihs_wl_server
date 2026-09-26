@@ -77,6 +77,11 @@ pub(crate) fn layer_id(states: &compositor::SurfaceData) -> u32 {
     states.data_map.get::<LayerId>().unwrap().0
 }
 
+/// A surface's layer id, if it has had one.
+pub(crate) fn layer_id_of(states: &compositor::SurfaceData) -> Option<u32> {
+    states.data_map.get::<LayerId>().map(|l| l.0)
+}
+
 fn transform_value(t: Transform) -> u32 {
     match t {
         Transform::Normal => 0,

@@ -34,6 +34,7 @@ pub mod observe;
 mod pacing;
 mod params;
 mod popups;
+mod scanout;
 mod staging;
 mod state;
 mod submit;

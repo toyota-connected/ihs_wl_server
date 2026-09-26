@@ -497,6 +497,33 @@ pub fn present_at(id: i32, seq: u64, ust_ns: u64, refresh_ns: u32, msc: u64, fla
     }
 }
 
+/// The shell's scanout hint for layer @p layer_id of view @p id: planes on
+/// @p dev scan out @p formats (fourcc, modifier); none withdraws it.
+pub fn scanout_hint(id: i32, layer_id: u32, dev: u64, formats: &[(u32, u64)]) {
+    let (cb, ud) = with(|r| {
+        let v = r.views.get(&id).expect("no such view");
+        (v.callbacks.scanout_hint, v.user_data)
+    });
+    let formats: Vec<sys::IhsFormatModifier> = formats
+        .iter()
+        .map(|&(fourcc, modifier)| sys::IhsFormatModifier {
+            fourcc,
+            modifier,
+            ..Default::default()
+        })
+        .collect();
+    let hint = cb.expect("no scanout_hint callback");
+    unsafe {
+        hint(
+            ud as *mut c_void,
+            layer_id,
+            dev,
+            formats.as_ptr(),
+            formats.len(),
+        )
+    };
+}
+
 /// The view leaves (true) or re-enters the scene.
 pub fn set_suspended(id: i32, suspended: bool) {
     let (cb, ud) = with(|r| {

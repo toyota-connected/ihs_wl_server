@@ -49,6 +49,9 @@ pub struct State {
     /// Kept alive for the global's lifetime.
     #[allow(dead_code)]
     pub dmabuf_global: DmabufGlobal,
+    /// The global's default feedback: v4, with a main device.
+    pub default_feedback: Option<smithay::wayland::dmabuf::DmabufFeedback>,
+    pub scanout: crate::scanout::Scanout,
     #[allow(dead_code)]
     pub viewporter_state: ViewporterState,
     #[allow(dead_code)]
@@ -144,7 +147,8 @@ impl State {
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         let devices = crate::input::Devices::add(&mut seat);
         let mut dmabuf_state = DmabufState::new();
-        let dmabuf_global = crate::handlers::dmabuf::global(&mut dmabuf_state, &dh, caps);
+        let (dmabuf_global, default_feedback) =
+            crate::handlers::dmabuf::global(&mut dmabuf_state, &dh, caps);
         State {
             // v6: preferred_buffer_scale, the integer fallback for scale.
             compositor_state: CompositorState::new_v6::<Self>(&dh),
@@ -152,6 +156,8 @@ impl State {
             shm_state: ShmState::new::<Self>(&dh, vec![]),
             dmabuf_state,
             dmabuf_global,
+            default_feedback,
+            scanout: Default::default(),
             viewporter_state: ViewporterState::new::<Self>(&dh),
             // The shell reports CLOCK_MONOTONIC times.
             presentation_state: PresentationState::new::<Self>(&dh, libc::CLOCK_MONOTONIC as u32),
@@ -289,6 +295,7 @@ impl State {
                 time_us,
             } => self.key_input(view_id, evdev, pressed, time_us),
             Cmd::Focus { view_id, focused } => self.focus_input(view_id, focused),
+            Cmd::ScanoutHint { view_id, hint } => self.scanout_hint(view_id, hint),
         }
     }
 
@@ -355,6 +362,7 @@ impl State {
 
     /// Break the view's binding, handing back every buffer it held.
     pub fn unbind_view(&mut self, view_id: i32) {
+        self.forget_scanout(view_id);
         self.drop_frames(view_id);
         // Else the shell keeps showing the toplevel's last frame.
         self.clear_view(view_id);

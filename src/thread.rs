@@ -64,6 +64,11 @@ pub enum Cmd {
         view_id: i32,
         focused: bool,
     },
+    /// The shell's scanout hint for a layer of the view (display thread).
+    ScanoutHint {
+        view_id: i32,
+        hint: crate::scanout::Hint,
+    },
 }
 
 struct Running {
