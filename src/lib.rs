@@ -271,7 +271,7 @@ pub unsafe extern "C" fn ihs_wl_activation_token(out: *mut c_char, cap: usize) -
                 format!("token needs {} bytes", token.len() + 1),
             ));
         }
-        std::ptr::copy_nonoverlapping(token.as_ptr(), out as *mut u8, token.len());
+        std::ptr::copy_nonoverlapping(token.as_ptr(), out.cast::<u8>(), token.len());
         *out.add(token.len()) = 0;
         Ok(token.len() as c_int)
     })

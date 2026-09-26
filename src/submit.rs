@@ -207,8 +207,13 @@ fn frame_for(dmabuf: &Dmabuf, buffer_id: u32) -> Option<sys::IhsFrame> {
 fn file_id(fd: std::os::fd::BorrowedFd<'_>) -> Option<(u64, u64)> {
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: a live fd and a stat buffer of the right size.
-    (unsafe { libc::fstat(std::os::fd::AsRawFd::as_raw_fd(&fd), &mut st) } == 0)
-        .then_some((st.st_dev, st.st_ino))
+    if unsafe { libc::fstat(std::os::fd::AsRawFd::as_raw_fd(&fd), &mut st) } != 0 {
+        return None;
+    }
+    // Widened: st_ino is u32 on 32-bit ARM, where the rest are already u64.
+    #[allow(clippy::useless_conversion)]
+    let id = (u64::from(st.st_dev), u64::from(st.st_ino));
+    Some(id)
 }
 
 fn close_frame(frame: &sys::IhsFrame) {
