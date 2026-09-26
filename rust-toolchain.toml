@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Toyota Connected North America
 # SPDX-License-Identifier: Apache-2.0
 
-# Pinned to the rustc that meta-lts-mixins scarthgap/rust ships, so host and
-# Yocto builds use one compiler. Stock oe-core scarthgap has 1.75.0, which
-# cannot build smithay (MSRV 1.80.1); the image needs the lts-mixins layer.
+# Pinned to the oldest rustc a supported Yocto release builds with, so nothing
+# newer creeps in: wrynose ships 1.94.1. master ships 1.98.1, and scarthgap
+# gets 1.98.1 from meta-lts-mixins scarthgap/rust (its own 1.75.0 cannot build
+# smithay, MSRV 1.80.1). Keep Cargo.toml's rust-version in step.
 [toolchain]
-channel = "1.98.1"
+channel = "1.94.1"
 components = ["clippy", "rustfmt"]
 profile = "minimal"
