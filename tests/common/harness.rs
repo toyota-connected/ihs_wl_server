@@ -42,7 +42,13 @@ pub struct Harness {
 
 impl Harness {
     pub fn new(socket: &str) -> Self {
+        Self::with_render_device(socket, 0)
+    }
+
+    /// A harness whose shell imports on render node @p dev (a dev_t).
+    pub fn with_render_device(socket: &str, dev: u64) -> Self {
         mock_host::install();
+        mock_host::set_render_device(dev);
         let rec = Recorder::install();
         ihs_wl_server::start(ihs_wl_server::Config {
             socket_name: Some(socket.into()),
@@ -95,6 +101,7 @@ impl Harness {
 impl Drop for Harness {
     fn drop(&mut self) {
         ihs_wl_server::stop().unwrap();
+        mock_host::set_render_device(0);
         mock_host::uninstall();
         super::clear_observer();
     }

@@ -161,7 +161,7 @@ unsafe extern "C" fn factory(
             renegotiate: Some(on_renegotiate),
             dispose: Some(on_dispose),
             presented: Some(on_presented),
-            scanout_hint: None,
+            scanout_hint: Some(on_scanout_hint),
         };
         *out_user_data = Arc::into_raw(shared) as *mut c_void;
         observe::emit(Observed::ViewCreated { view_id: id });
@@ -215,6 +215,39 @@ unsafe extern "C" fn on_presented(
                 refresh_ns,
                 msc,
                 flags,
+            },
+        });
+    });
+}
+
+/// The shell's display thread: layer @p layer_id could go on a plane if it
+/// were in one of @p formats.
+unsafe extern "C" fn on_scanout_hint(
+    user_data: *mut c_void,
+    layer_id: u32,
+    dev: u64,
+    formats: *const sys::IhsFormatModifier,
+    count: usize,
+) {
+    callback("scanout_hint", || {
+        let view = shared(user_data);
+        let formats = if formats.is_null() || count == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(formats, count)
+                .iter()
+                .map(|f| crate::caps::FormatModifier {
+                    fourcc: f.fourcc,
+                    modifier: f.modifier,
+                })
+                .collect()
+        };
+        let _ = thread::send(Cmd::ScanoutHint {
+            view_id: view.id,
+            hint: crate::scanout::Hint {
+                layer_id,
+                dev,
+                formats,
             },
         });
     });

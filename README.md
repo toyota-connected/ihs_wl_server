@@ -46,6 +46,12 @@ Early development. Working today:
   device as main device, so Mesa's Wayland EGL and Vulkan, GTK and Qt render
   on the GPU the shell imports on. A shell that cannot tell its device gets
   v3.
+- Per-surface feedback with a scanout tranche. When the shell reports that a
+  surface's layer could go on a KMS plane but for its buffer's format, that
+  surface's feedback gets a scanout tranche for the KMS device, ahead of the
+  main one: the planes' formats that the shell also imports. The client
+  allocates its next buffers for the plane, and the layer bypasses
+  composition. The tranche stays while the view shows the surface.
 - Frame timing follows the shell's reports of shown frames. Presentation
   feedback carries the display's time, refresh, counter and flags (including
   zero-copy). A fifo barrier clears once the update that set it is shown. A
@@ -101,7 +107,6 @@ hooks:
 Not yet implemented:
 
 - Binding a view to its toplevel by activation token.
-- Per-surface dma-buf feedback (scanout tranches).
 
 `ihs_wl_activation_token` exists but returns `IHS_WL_RESULT_ERR_UNSUPPORTED`
 for now.
