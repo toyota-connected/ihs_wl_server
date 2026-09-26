@@ -15,7 +15,7 @@ use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::drm_syncobj::DrmSyncobjCachedState;
 use smithay::wayland::shell::xdg::XDG_POPUP_ROLE;
 use smithay::wayland::shm::{ShmHandler, ShmState};
-use smithay::{delegate_compositor, delegate_shm};
+use smithay::{delegate_compositor, delegate_shm, delegate_single_pixel_buffer};
 
 use crate::observe::{self, Observed};
 use crate::state::{app_id_and_title, ClientState, State, Toplevels};
@@ -215,3 +215,4 @@ impl ShmHandler for State {
 
 delegate_compositor!(State);
 delegate_shm!(State);
+delegate_single_pixel_buffer!(State);

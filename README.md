@@ -18,7 +18,8 @@ any Flutter layer or puts it directly on a display plane.
 Early development. Working today:
 
 - A Wayland socket with `wl_compositor`, `wl_subcompositor`, `xdg_wm_base`,
-  `wl_shm`, `zwp_linux_dmabuf_v1`, `wp_viewporter`, `wp_presentation`,
+  `wl_shm`, `wp_single_pixel_buffer_manager_v1`, `zwp_linux_dmabuf_v1`,
+  `wp_viewporter`, `wp_presentation`,
   `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`,
   `wp_linux_drm_syncobj_manager_v1` (when a render node supports it),
   `wl_seat`, `wp_cursor_shape_manager_v1`, `xdg_activation_v1`,
@@ -37,7 +38,9 @@ Early development. Working today:
   a display that scans out only contiguous memory (the Raspberry Pi 5) can
   put them on a plane, else from gbm on a render node.
   `IHS_WL_STAGING_HEAP` names a heap under `/dev/dma_heap`;
-  `IHS_WL_STAGING_DEVICE` names a render node and forces gbm.
+  `IHS_WL_STAGING_DEVICE` names a render node and forces gbm. A single-pixel
+  buffer goes the same way, as a 1x1 buffer of its color for the shell to
+  stretch.
 - Commits are held until their dma-bufs are ready, so the shell never needs
   an acquire fence. With explicit sync the commit's acquire point decides;
   otherwise the buffer's implicit fence does. A buffer's release point is

@@ -3,6 +3,9 @@
 
 //! Shared-memory surfaces, shown through dma-bufs the server owns.
 //!
+//! Single-pixel buffers (wp_single_pixel_buffer_v1) go the same way, as a
+//! 1x1 slot of their color for the shell to scale.
+//!
 //! The shell imports dma-bufs; a `wl_shm` buffer is plain memory. Each shm
 //! surface gets a small ring of linear dma-bufs. They come from a contiguous
 //! (CMA) dma-heap when there is one -- a display that can only scan out
@@ -30,7 +33,8 @@ use smithay::backend::renderer::utils::{CommitCounter, RendererSurfaceState};
 use smithay::reexports::wayland_server::protocol::{wl_buffer::WlBuffer, wl_shm};
 use smithay::utils::DeviceFd;
 use smithay::wayland::compositor::SurfaceData;
-use smithay::wayland::shm::{self, BufferData};
+use smithay::wayland::shm;
+use smithay::wayland::single_pixel_buffer::get_single_pixel_buffer;
 
 /// Slots per surface, at most: double buffering, plus the shell's pipeline.
 const MAX_SLOTS: usize = 4;
@@ -183,10 +187,47 @@ fn fourcc(format: wl_shm::Format) -> Option<Fourcc> {
     }
 }
 
-/// Stage the surface's current shm buffer. None when it cannot be shown (no
-/// allocator, a format other than ARGB/XRGB8888, a failed allocation);
-/// @p retired collects the uids of slots dropped, whose buffer ids the caller
-/// retires.
+/// What a slot is filled from.
+enum Source {
+    Shm {
+        width: i32,
+        height: i32,
+        stride: usize,
+        offset: usize,
+    },
+    /// One premultiplied ARGB8888 pixel, in memory order (B, G, R, A).
+    Pixel([u8; 4]),
+}
+
+impl Source {
+    fn of(buffer: &WlBuffer) -> Option<(Source, Fourcc)> {
+        if let Ok(data) = shm::with_buffer_contents(buffer, |_, _, data| data) {
+            let source = Source::Shm {
+                width: data.width,
+                height: data.height,
+                stride: data.stride.max(0) as usize,
+                offset: data.offset.max(0) as usize,
+            };
+            return Some((source, fourcc(data.format)?));
+        }
+        let pixel = get_single_pixel_buffer(buffer).ok()?;
+        // The protocol's values are premultiplied already.
+        let [r, g, b, a] = pixel.rgba8888();
+        Some((Source::Pixel([b, g, r, a]), Fourcc::Argb8888))
+    }
+
+    fn size(&self) -> (i32, i32) {
+        match *self {
+            Source::Shm { width, height, .. } => (width, height),
+            Source::Pixel(_) => (1, 1),
+        }
+    }
+}
+
+/// Stage the surface's current shm or single-pixel buffer. None when it
+/// cannot be shown (no allocator, a format other than ARGB/XRGB8888, a failed
+/// allocation, another kind of buffer); @p retired collects the uids of slots
+/// dropped, whose buffer ids the caller retires.
 pub fn stage(
     stager: &mut Stager,
     states: &SurfaceData,
@@ -194,8 +235,8 @@ pub fn stage(
     render: &RendererSurfaceState,
     retired: &mut Vec<u64>,
 ) -> Option<Staged> {
-    let data = shm::with_buffer_contents(buffer, |_, _, data| data).ok()?;
-    let fourcc = fourcc(data.format)?;
+    let (source, fourcc) = Source::of(buffer)?;
+    let (width, height) = source.size();
     states
         .data_map
         .insert_if_missing_threadsafe(StagingRing::default);
@@ -207,11 +248,11 @@ pub fn stage(
         .lock()
         .unwrap_or_else(|e| e.into_inner());
 
-    if ring.width != data.width || ring.height != data.height || ring.fourcc != Some(fourcc) {
+    if ring.width != width || ring.height != height || ring.fourcc != Some(fourcc) {
         retired.extend(ring.slots.drain(..).map(|s| s.uid));
         *ring = Ring {
-            width: data.width,
-            height: data.height,
+            width,
+            height,
             fourcc: Some(fourcc),
             ..Ring::default()
         };
@@ -237,7 +278,7 @@ pub fn stage(
     let index = match free {
         Some(i) => i,
         None if ring.slots.len() < MAX_SLOTS => {
-            let slot = allocate(stager, &data, fourcc)?;
+            let slot = allocate(stager, width, height, fourcc)?;
             ring.slots.push(slot);
             ring.slots.len() - 1
         }
@@ -253,7 +294,15 @@ pub fn stage(
     };
 
     let slot = &mut ring.slots[index];
-    copy_damage(slot, buffer, &data, render)?;
+    match source {
+        Source::Shm { stride, offset, .. } => {
+            copy_damage(slot, buffer, (width, height), stride, offset, render)?
+        }
+        Source::Pixel(pixel) => write(slot, 1, 1, |dst, _| {
+            dst.get_mut(..4)?.copy_from_slice(&pixel);
+            Some(())
+        })?,
+    }
     slot.commit = Some(render.current_commit());
     let staged = Staged {
         dmabuf: slot.dmabuf.clone(),
@@ -275,10 +324,10 @@ pub fn drop_ring(states: &SurfaceData) -> Vec<u64> {
     uids
 }
 
-fn allocate(stager: &mut Stager, data: &BufferData, fourcc: Fourcc) -> Option<Slot> {
+fn allocate(stager: &mut Stager, width: i32, height: i32, fourcc: Fourcc) -> Option<Slot> {
     stager.next_uid += 1;
     let uid = stager.next_uid;
-    let (w, h) = (data.width.max(1) as u32, data.height.max(1) as u32);
+    let (w, h) = (width.max(1) as u32, height.max(1) as u32);
     let (mem, dmabuf) = match stager.backend()? {
         Backend::Heap(heap) => alloc_heap(heap, w, h, fourcc)?,
         Backend::Gbm(allocator) => {
@@ -391,18 +440,19 @@ fn explicitly_linear(dmabuf: Dmabuf, fourcc: Fourcc) -> Option<Dmabuf> {
     builder.build()
 }
 
-/// Copy what changed since @p slot was filled from the client's buffer.
+/// Copy what changed since @p slot was filled from the client's buffer, of
+/// @p size, @p src_stride and @p offset in its pool.
 fn copy_damage(
     slot: &mut Slot,
     buffer: &WlBuffer,
-    data: &BufferData,
+    size: (i32, i32),
+    src_stride: usize,
+    offset: usize,
     render: &RendererSurfaceState,
 ) -> Option<()> {
     const BPP: usize = 4;
     let damage = render.damage_since(slot.commit);
-    let (w, h) = (data.width.max(0) as usize, data.height.max(0) as usize);
-    let src_stride = data.stride.max(0) as usize;
-    let offset = data.offset.max(0) as usize;
+    let (w, h) = (size.0.max(0) as usize, size.1.max(0) as usize);
 
     let copy = |dst: &mut [u8], dst_stride: usize| {
         shm::with_buffer_contents(buffer, |src, src_len, _| {
@@ -433,23 +483,34 @@ fn copy_damage(
         })
         .ok()
     };
+    write(slot, w as u32, h as u32, copy)
+}
+
+/// Write @p slot's top-left @p w x @p h through @p f, given the mapping and
+/// its stride.
+fn write(
+    slot: &mut Slot,
+    w: u32,
+    h: u32,
+    f: impl FnOnce(&mut [u8], usize) -> Option<()>,
+) -> Option<()> {
     let mapped = match &mut slot.mem {
         Mem::Heap { map, len, stride } => {
             let sync = |flags: DmabufSyncFlags| slot.dmabuf.sync_plane(0, flags).ok();
             sync(DmabufSyncFlags::START | DmabufSyncFlags::WRITE);
             // SAFETY: our mapping of *len bytes, alive as long as the slot.
             let dst = unsafe { std::slice::from_raw_parts_mut(*map, *len) };
-            let copied = copy(dst, *stride);
+            let written = f(dst, *stride);
             sync(DmabufSyncFlags::END | DmabufSyncFlags::WRITE);
-            Ok(copied)
+            Ok(written)
         }
-        Mem::Gbm(bo) => bo.map_mut(0, 0, w as u32, h as u32, |map| {
+        Mem::Gbm(bo) => bo.map_mut(0, 0, w, h, |map| {
             let stride = map.stride() as usize;
-            copy(map.buffer_mut(), stride)
+            f(map.buffer_mut(), stride)
         }),
     };
     match mapped {
-        Ok(copied) => copied,
+        Ok(written) => written,
         Err(e) => {
             tracing::warn!("staging buffer map: {e}");
             None
