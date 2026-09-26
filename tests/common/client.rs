@@ -38,6 +38,7 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
     wp_linux_drm_syncobj_timeline_v1,
 };
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1;
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xdg_activation_v1};
 use wayland_protocols::xdg::shell::client::{
@@ -94,6 +95,7 @@ struct App {
     enter_serial: Option<u32>,
     cursor_shape_manager: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
     activation: Option<xdg_activation_v1::XdgActivationV1>,
+    single_pixel: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     /// The last xdg_activation_token_v1.done.
     client_token: Option<String>,
     /// The popup's last xdg_popup.configure: x, y, width, height.
@@ -576,6 +578,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 }
                 "wp_viewporter" => app.viewporter = Some(registry.bind(name, 1, qh, ())),
                 "xdg_activation_v1" => app.activation = Some(registry.bind(name, 1, qh, ())),
+                "wp_single_pixel_buffer_manager_v1" => {
+                    app.single_pixel = Some(registry.bind(name, 1, qh, ()))
+                }
                 "wp_cursor_shape_manager_v1" => {
                     app.cursor_shape_manager = Some(registry.bind(name, 1, qh, ()))
                 }
@@ -631,6 +636,7 @@ delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleMana
 delegate_noop!(App: ignore wp_viewporter::WpViewporter);
 delegate_noop!(App: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
 delegate_noop!(App: ignore xdg_activation_v1::XdgActivationV1);
+delegate_noop!(App: ignore wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1);
 
 impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, ()> for App {
     fn event(
@@ -1325,6 +1331,31 @@ impl Client {
     pub fn entered(&self, sub: bool) -> u32 {
         let id = self.surface_id(sub);
         self.app.entered.get(&id).copied().unwrap_or(0)
+    }
+
+    /// Attach a single-pixel buffer of premultiplied @p rgba (8 bits each) to
+    /// the toplevel, and commit.
+    pub fn commit_single_pixel(&mut self, rgba: [u8; 4]) {
+        let qh = self.queue.handle();
+        let manager = self
+            .app
+            .single_pixel
+            .as_ref()
+            .expect("single-pixel buffers");
+        let wide = |c: u8| u32::from(c) * 0x0101_0101;
+        let buffer = manager.create_u32_rgba_buffer(
+            wide(rgba[0]),
+            wide(rgba[1]),
+            wide(rgba[2]),
+            wide(rgba[3]),
+            &qh,
+            (),
+        );
+        let surface = self._surface.as_ref().unwrap();
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, 1, 1);
+        surface.commit();
+        self.roundtrip();
     }
 
     /// Show the toplevel at @p width x @p height logical pixels from its next

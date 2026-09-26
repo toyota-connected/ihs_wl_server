@@ -8,23 +8,21 @@
 // any pkg-config consumer; a Yocto build does this through the cargo bbclass.
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The platform-view ABI the module is written against: image layers (1.16),
 /// render_device (1.14), scanout_hint (1.13). The .pc version does not track
-/// it, so it is read from the headers.
+/// it, so it is read from the headers bindgen parsed -- the ones clang
+/// resolved, wherever they are.
 const ABI_MINOR: u32 = 16;
 
-/// IHS_SHARED_ABI_<field> from ihs/ihs_version.h under one of @p includes.
-fn abi(includes: &[PathBuf], field: &str) -> Option<(PathBuf, u32)> {
-    let name = format!("#define IHS_SHARED_ABI_{field} ");
-    includes.iter().find_map(|dir| {
-        let path = Path::new(dir).join("ihs/ihs_version.h");
-        let text = std::fs::read_to_string(&path).ok()?;
-        let value = text.lines().find_map(|l| l.strip_prefix(&name))?;
-        let value = value.trim().trim_end_matches('u').parse().ok()?;
-        Some((path, value))
-    })
+/// `pub const IHS_SHARED_ABI_<field>: u32 = N;` in the generated bindings.
+fn abi(bindings: &str, field: &str) -> Option<u32> {
+    let name = format!("pub const IHS_SHARED_ABI_{field}: u32 = ");
+    bindings
+        .lines()
+        .find_map(|l| l.trim().strip_prefix(&name))
+        .and_then(|v| v.trim_end_matches(';').parse().ok())
 }
 
 fn main() {
@@ -32,27 +30,6 @@ fn main() {
         .atleast_version("1.0.0")
         .probe("ivi-homescreen-shared")
         .expect("ivi-homescreen-shared.pc not found; set PKG_CONFIG_PATH");
-
-    match (
-        abi(&lib.include_paths, "MAJOR"),
-        abi(&lib.include_paths, "MINOR"),
-    ) {
-        (Some((path, 1)), Some((_, minor))) => {
-            println!("cargo:rerun-if-changed={}", path.display());
-            assert!(
-                minor >= ABI_MINOR,
-                "ivi-homescreen-shared at {} has platform-view ABI 1.{minor}; \
-                 ihs_wl_server needs 1.{ABI_MINOR} or newer",
-                path.display()
-            );
-        }
-        (Some((path, major)), _) => panic!(
-            "ivi-homescreen-shared at {} has platform-view ABI major {major}; \
-             ihs_wl_server is written against 1.x",
-            path.display()
-        ),
-        _ => panic!("no ihs/ihs_version.h under {:?}", lib.include_paths),
-    }
 
     // A native dev build against a local shared/ install gets an rpath so
     // `cargo test` runs without LD_LIBRARY_PATH. Never for a cross or
@@ -81,10 +58,24 @@ fn main() {
     for inc in &lib.include_paths {
         builder = builder.clang_arg(format!("-I{}", inc.display()));
     }
+    let bindings = builder.generate().expect("bindgen over ihs/*.h failed");
+
+    // Before the bindings are used, so an old shell fails here with one line
+    // rather than in rustc with a missing type per call site.
+    let text = bindings.to_string();
+    match (abi(&text, "MAJOR"), abi(&text, "MINOR")) {
+        (Some(1), Some(minor)) => assert!(
+            minor >= ABI_MINOR,
+            "ivi-homescreen-shared has platform-view ABI 1.{minor}; \
+             ihs_wl_server needs 1.{ABI_MINOR} or newer"
+        ),
+        (Some(major), _) => panic!(
+            "ivi-homescreen-shared has platform-view ABI major {major}; \
+             ihs_wl_server is written against 1.x"
+        ),
+        _ => panic!("no IHS_SHARED_ABI_MAJOR/MINOR in the ihs headers"),
+    }
+
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("ihs_bindings.rs");
-    builder
-        .generate()
-        .expect("bindgen over ihs/*.h failed")
-        .write_to_file(out)
-        .unwrap();
+    bindings.write_to_file(out).unwrap();
 }

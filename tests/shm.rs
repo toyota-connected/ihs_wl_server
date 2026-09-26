@@ -51,6 +51,29 @@ fn a_shm_toplevel_is_shown_through_a_dma_heap() {
     shown_through_staging("ihs-wl-test-shm-heap");
 }
 
+/// A single-pixel buffer goes as a 1x1 staging buffer of its premultiplied
+/// color, which the shell stretches to the viewport's size.
+#[test]
+fn a_single_pixel_buffer_is_shown_stretched() {
+    let _serial = serial();
+    if !have_render_node() {
+        eprintln!("skipped: no render node");
+        return;
+    }
+    let mut h = Harness::new("ihs-wl-test-single-pixel");
+    mock_host::set_probe(Some((0, 0)));
+    h.client.create_toplevel("org.example.p", "p");
+    h.client.set_viewport_destination(64, 32);
+    h.client.commit_single_pixel([0x20, 0x40, 0x10, 0x80]);
+    h.bind(15, "org.example.p", 64.0, 32.0);
+    let l = &h.wait_submissions(15, 1)[0].layers[0];
+    assert_eq!((l.width, l.height, l.fourcc), (1, 1, ARGB8888));
+    assert_eq!(l.dst, (0, 0, 64, 32));
+    assert_eq!(l.probe, Some(0x8020_4010), "ARGB, premultiplied");
+    mock_host::set_probe(None);
+    mock_host::dispose_view(15);
+}
+
 fn shown_through_staging(socket: &str) {
     let mut h = Harness::new(socket);
     mock_host::set_probe(Some((5, 7)));

@@ -45,6 +45,9 @@ pub struct State {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
+    /// Kept alive for the global's lifetime.
+    #[allow(dead_code)]
+    pub single_pixel_buffer_state: smithay::wayland::single_pixel_buffer::SinglePixelBufferState,
     pub dmabuf_state: DmabufState,
     /// Kept alive for the global's lifetime.
     #[allow(dead_code)]
@@ -158,6 +161,8 @@ impl State {
             compositor_state: CompositorState::new_v6::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
             shm_state: ShmState::new::<Self>(&dh, vec![]),
+            single_pixel_buffer_state:
+                smithay::wayland::single_pixel_buffer::SinglePixelBufferState::new::<Self>(&dh),
             dmabuf_state,
             dmabuf_global,
             default_feedback,
