@@ -48,7 +48,7 @@ pub fn params_dpr(app_id: &str, dpr: f64) -> Vec<u8> {
         b.extend_from_slice(s.as_bytes());
     }
     b.push(6); // float64
-    while b.len() % 8 != 0 {
+    while !b.len().is_multiple_of(8) {
         b.push(0);
     }
     b.extend_from_slice(&dpr.to_le_bytes());

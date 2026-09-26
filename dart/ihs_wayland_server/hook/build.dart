@@ -22,7 +22,15 @@
 //
 //             cargo_features: [egl-wl-display]
 //
-// SKIP_NATIVE_BUILD skips the build (the library comes from elsewhere).
+//   - a library installed by the system (a Yocto image's ihs-wl-server
+//     package, say) rather than built here:
+//
+//             system_library: true
+//
+//     Nothing is built or bundled then; the app loads libihs_wl_server.so by
+//     name, from the linker's search path.
+//
+// SKIP_NATIVE_BUILD skips the build too, where the environment gets through.
 
 import 'dart:convert';
 import 'dart:io';
@@ -36,6 +44,7 @@ void main(List<String> args) async {
   await build(args, (input, output) async {
     if (!input.config.buildCodeAssets) return;
     if (Platform.environment.containsKey('SKIP_NATIVE_BUILD')) return;
+    if (_flag(input.userDefines['system_library'], 'system_library')) return;
 
     final code = input.config.code;
     if (code.targetOS != OS.linux) {
@@ -164,3 +173,10 @@ List<String> _features(Object? value) {
               ),
   ];
 }
+
+/// A boolean user-define: absent is false.
+bool _flag(Object? value, String name) => switch (value) {
+  null => false,
+  bool b => b,
+  _ => throw ArgumentError.value(value, name, 'expected true or false'),
+};

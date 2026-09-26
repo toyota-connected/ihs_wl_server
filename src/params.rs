@@ -160,7 +160,7 @@ mod tests {
         string(&mut b, "org.example.app");
         string(&mut b, "dpr");
         b.push(T_FLOAT64);
-        while b.len() % 8 != 0 {
+        while !b.len().is_multiple_of(8) {
             b.push(0);
         }
         b.extend_from_slice(&1.5f64.to_le_bytes());

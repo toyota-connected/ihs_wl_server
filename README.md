@@ -121,12 +121,11 @@ hooks:
 
 This crate needs:
 
-- **Rust 1.98.1.** It is pinned in `rust-toolchain.toml` to match the compiler
-  that meta-lts-mixins `scarthgap/rust` ships, so host builds and Yocto
-  builds use the same compiler.
-- **ivi-homescreen's shared library (`libihs_shared`), at ABI version 1.14 or
-  newer.** The build finds it through `ivi-homescreen-shared.pc` and generates
-  bindings from its headers.
+- **Rust 1.94.1 or newer.** `rust-toolchain.toml` pins 1.94.1, the oldest
+  compiler a supported Yocto release ships, so nothing newer creeps in.
+- **ivi-homescreen's shared library (`libihs_shared`), at platform-view ABI
+  1.16 or newer.** The build finds it through `ivi-homescreen-shared.pc`,
+  checks the ABI in its headers, and generates bindings from them.
 - **clang**, for bindgen.
 
 To install the shared library to a local prefix and build against it:
@@ -147,6 +146,28 @@ so `cargo test` runs without `LD_LIBRARY_PATH`. Cross builds and sysroot
 builds never get an rpath. To cross-compile, set `PKG_CONFIG_SYSROOT_DIR` and
 `PKG_CONFIG_PATH` as for any pkg-config consumer. In Yocto, the cargo bbclass
 sets them for you.
+
+### Yocto
+
+meta-flutter's `ihs-wl-server` recipe builds and installs the library;
+`PACKAGECONFIG` `egl-wl-display` turns on the cargo feature. The Rust each
+release needs:
+
+| Release | Rust | Layers |
+|---|---|---|
+| master | 1.98.1 | oe-core |
+| wrynose | 1.94.1 | oe-core |
+| scarthgap | 1.98.1 | meta-lts-mixins `scarthgap/rust` and meta-clang; the recipe is a dynamic layer on the former |
+
+An app built in the image takes the installed library instead of building
+its own; name it in the app's pubspec:
+
+```yaml
+hooks:
+  user_defines:
+    ihs_wayland_server:
+      system_library: true
+```
 
 ## Using it from Flutter
 
