@@ -21,9 +21,12 @@ Early development. Working today:
   `wl_shm`, `zwp_linux_dmabuf_v1`, `wp_viewporter`, `wp_presentation`,
   `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`,
   `wp_linux_drm_syncobj_manager_v1` (when a render node supports it),
-  `wl_seat`, `wp_cursor_shape_manager_v1`, `wl_data_device_manager`,
-  `wl_output` and `zxdg_output_manager_v1`.
-- A view binds to a toplevel by app_id and configures it to the view's size.
+  `wl_seat`, `wp_cursor_shape_manager_v1`, `xdg_activation_v1`,
+  `wl_data_device_manager`, `wl_output` and `zxdg_output_manager_v1`.
+- A view binds to a toplevel by activation token or app_id and configures
+  it to the view's size. `xdg_activation_v1` carries the token: a client
+  started with one the module issued (`ihs_wl_activation_token`) in
+  `XDG_ACTIVATION_TOKEN` activates its toplevel with it, as GTK and Qt do.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
   buffer transforms and opaque regions) reaches the shell as one layer per
   surface, bottom to top. Each layer keeps a stable id, so it keeps its
@@ -104,13 +107,6 @@ hooks:
       cargo_features: [egl-wl-display]
 ```
 
-Not yet implemented:
-
-- Binding a view to its toplevel by activation token.
-
-`ihs_wl_activation_token` exists but returns `IHS_WL_RESULT_ERR_UNSUPPORTED`
-for now.
-
 ## Layout
 
 | Path                        | What                                                        |
@@ -169,6 +165,22 @@ const WaylandToplevelView(appId: 'org.example.app');
 A view shows the oldest toplevel with a matching app_id that no other view is
 already showing, or with no app_id given, the oldest one at all. It stays empty
 until such a client maps.
+
+To show the very client you start, whatever else runs with the same app_id,
+launch it with an activation token and name the token in its view:
+
+```dart
+final (:process, :token) = await server.launch('gnome-calculator', []);
+
+WaylandToplevelView(activationToken: token);
+```
+
+`launch` sets `WAYLAND_DISPLAY` and `XDG_ACTIVATION_TOKEN` for the client;
+`server.activationToken()` gives a token for a launcher of your own. The client
+activates its toplevel with the token (GTK and Qt do this unprompted), and the
+view binds that toplevel. Views binding by app_id pass over toplevels launched
+with a token. A client that ignores `XDG_ACTIVATION_TOKEN` is never found by
+one; show it by app_id instead.
 
 The package's build hook builds the crate with cargo as part of the app's
 build and bundles the library, so there is nothing to build by hand. The

@@ -18,6 +18,26 @@ pub fn params(app_id: &str) -> Vec<u8> {
     b
 }
 
+/// creationParams for `{'token': token, 'app_id': app_id}`, app_id
+/// null when None.
+pub fn params_token(token: &str, app_id: Option<&str>) -> Vec<u8> {
+    let mut b = vec![13u8, 2]; // map, 2 entries
+    for s in ["token", token, "app_id"] {
+        b.push(7);
+        b.push(s.len() as u8);
+        b.extend_from_slice(s.as_bytes());
+    }
+    match app_id {
+        Some(a) => {
+            b.push(7);
+            b.push(a.len() as u8);
+            b.extend_from_slice(a.as_bytes());
+        }
+        None => b.push(0), // null
+    }
+    b
+}
+
 /// creationParams for `{'app_id': app_id, 'dpr': dpr}`. A float64 is
 /// aligned to 8 bytes from the start of the message.
 pub fn params_dpr(app_id: &str, dpr: f64) -> Vec<u8> {

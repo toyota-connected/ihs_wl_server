@@ -15,11 +15,14 @@ const String _viewType = 'ihs_wl/toplevel';
 
 /// Shows one Wayland client toplevel.
 ///
-/// The toplevel is found by [activationToken] (the token the launcher put in
-/// the client's `XDG_ACTIVATION_TOKEN`), or else by [appId]: the oldest
-/// toplevel with that app_id not already shown elsewhere. With neither, it
-/// is the oldest toplevel not shown elsewhere, whatever its app_id. Until a
-/// matching client maps, the view is empty.
+/// With an [activationToken] (from [WaylandServer.activationToken] or
+/// [WaylandServer.launch]), the toplevel is the one its client activates
+/// with that token, as GTK and Qt clients started with it in
+/// `XDG_ACTIVATION_TOKEN` do; [appId] is not used then. Without one, it is
+/// the oldest toplevel with [appId] not already shown elsewhere, or with
+/// neither, the oldest toplevel not shown elsewhere -- in both cases passing
+/// over toplevels launched with a token, which are for the views naming
+/// theirs. Until a matching client maps, the view is empty.
 ///
 /// Pointer and touch input over the view go to the client under it, and the
 /// mouse cursor over it is the one the client asks for. The view takes
@@ -34,6 +37,7 @@ class WaylandToplevelView extends StatefulWidget {
     this.autofocus = false,
   });
 
+  /// The token the client was launched with.
   final String? activationToken;
   final String? appId;
 

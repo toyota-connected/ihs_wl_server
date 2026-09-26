@@ -39,6 +39,7 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
 };
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
+use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xdg_activation_v1};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
@@ -92,6 +93,9 @@ struct App {
     /// The serial of the last wl_pointer.enter.
     enter_serial: Option<u32>,
     cursor_shape_manager: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
+    activation: Option<xdg_activation_v1::XdgActivationV1>,
+    /// The last xdg_activation_token_v1.done.
+    client_token: Option<String>,
     /// The popup's last xdg_popup.configure: x, y, width, height.
     popup_geometry: Option<(i32, i32, i32, i32)>,
     popup_done: bool,
@@ -571,6 +575,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.fractional_manager = Some(registry.bind(name, 1, qh, ()))
                 }
                 "wp_viewporter" => app.viewporter = Some(registry.bind(name, 1, qh, ())),
+                "xdg_activation_v1" => app.activation = Some(registry.bind(name, 1, qh, ())),
                 "wp_cursor_shape_manager_v1" => {
                     app.cursor_shape_manager = Some(registry.bind(name, 1, qh, ()))
                 }
@@ -625,6 +630,22 @@ delegate_noop!(App: ignore wayland_client::protocol::wl_output::WlOutput);
 delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(App: ignore wp_viewporter::WpViewporter);
 delegate_noop!(App: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
+delegate_noop!(App: ignore xdg_activation_v1::XdgActivationV1);
+
+impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &xdg_activation_token_v1::XdgActivationTokenV1,
+        event: xdg_activation_token_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_activation_token_v1::Event::Done { token } = event {
+            app.client_token = Some(token);
+        }
+    }
+}
 delegate_noop!(App: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 delegate_noop!(App: ignore wp_viewport::WpViewport);
 
@@ -1055,6 +1076,25 @@ impl Client {
             want.peek().is_none()
         });
         self.take_input()
+    }
+
+    /// Activate the toplevel with @p token, as a client launched with it in
+    /// XDG_ACTIVATION_TOKEN does.
+    pub fn activate(&mut self, token: &str) {
+        let activation = self.app.activation.as_ref().expect("xdg_activation_v1");
+        activation.activate(token.into(), self._surface.as_ref().unwrap());
+        self.roundtrip();
+    }
+
+    /// A token of the client's own making, as for launching another client.
+    pub fn client_token(&mut self) -> String {
+        let qh = self.queue.handle();
+        let activation = self.app.activation.as_ref().expect("xdg_activation_v1");
+        let token = activation.get_activation_token(&qh, ());
+        token.commit();
+        self.dispatch_until("activation token", |c| c.app.client_token.is_some());
+        token.destroy();
+        self.app.client_token.take().unwrap()
     }
 
     /// Ask for cursor @p shape over the surface the pointer entered last.
