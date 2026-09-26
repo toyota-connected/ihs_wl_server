@@ -71,6 +71,7 @@ pub struct State {
     /// What the shell imports.
     pub caps: Caps,
     pub seat_state: SeatState<Self>,
+    pub activation_state: smithay::wayland::xdg_activation::XdgActivationState,
     /// Kept alive for the global's lifetime.
     #[allow(dead_code)]
     pub cursor_shape_state: smithay::wayland::cursor_shape::CursorShapeManagerState,
@@ -171,6 +172,9 @@ impl State {
             caps: caps.clone(),
             data_device_state: DataDeviceState::new::<Self>(&dh),
             cursor_shape_state: smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(
+                &dh,
+            ),
+            activation_state: smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(
                 &dh,
             ),
             seat_state,
@@ -296,13 +300,17 @@ impl State {
             } => self.key_input(view_id, evdev, pressed, time_us),
             Cmd::Focus { view_id, focused } => self.focus_input(view_id, focused),
             Cmd::ScanoutHint { view_id, hint } => self.scanout_hint(view_id, hint),
+            Cmd::IssueToken(reply) => {
+                let _ = reply.send(self.issue_activation_token());
+            }
         }
     }
 
-    /// Bind @p view_id to a toplevel if it has none: the oldest mapped,
-    /// unbound one with the view's app_id, or with any app_id when the view
-    /// names neither an app_id nor a token. Binding by activation token is
-    /// not wired up yet, so a view that names only a token waits.
+    /// Bind @p view_id to a toplevel if it has none. A view naming a token
+    /// binds the toplevel activated with it, and waits for it. Otherwise
+    /// the oldest mapped, unbound one with the view's app_id, or with any
+    /// app_id when the view names none -- passing over toplevels activated
+    /// with a token, which are for the views naming theirs.
     pub fn try_bind_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
@@ -311,13 +319,14 @@ impl State {
             return;
         }
         let params = &entry.handle.params;
-        if params.app_id.is_none() && params.token.is_some() {
-            return;
-        }
+        let token = params.token.clone();
         let want = params.app_id.clone();
         let found = self.toplevels.by_id.iter().find_map(|(id, t)| {
             if !t.mapped || t.view.is_some() {
                 return None;
+            }
+            if token.is_some() || t.token.is_some() {
+                return (t.token == token).then_some(*id);
             }
             match &want {
                 Some(app_id) => {
@@ -468,6 +477,9 @@ pub struct ToplevelEntry {
     pub mapped: bool,
     /// The view showing it, once bound.
     pub view: Option<i32>,
+    /// The token it was activated with, one the module issued: it is for
+    /// the view naming that token.
+    pub token: Option<String>,
 }
 
 /// The toplevel id, stored in the surface's data map.
@@ -487,6 +499,7 @@ impl Toplevels {
             ToplevelEntry {
                 surface,
                 mapped: false,
+                token: None,
                 view: None,
             },
         );

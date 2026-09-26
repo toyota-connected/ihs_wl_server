@@ -205,7 +205,8 @@ const char *ihs_wl_socket_name(void);
  Issue an xdg-activation token for a client about to be launched:
  the launcher exports it as `XDG_ACTIVATION_TOKEN` and passes the same
  token in the view's creationParams. Writes a NUL-terminated token of at
- most `cap` bytes to `out`; returns its length.
+ most `cap` bytes to `out`; returns its length. Waits for the server
+ thread, so not from a callback the server makes.
 
  # Safety
  `out` must be writable for `cap` bytes.

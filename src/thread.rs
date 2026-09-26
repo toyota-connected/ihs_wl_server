@@ -64,6 +64,8 @@ pub enum Cmd {
         view_id: i32,
         focused: bool,
     },
+    /// Issue an activation token, sent back on the channel.
+    IssueToken(std::sync::mpsc::SyncSender<String>),
     /// The shell's scanout hint for a layer of the view (display thread).
     ScanoutHint {
         view_id: i32,

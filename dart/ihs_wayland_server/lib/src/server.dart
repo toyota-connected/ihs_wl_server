@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import 'dart:ffi' as ffi;
+import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
@@ -76,6 +77,52 @@ class WaylandServer {
   String? get socketName {
     final ffi.Pointer<ffi.Char> name = _lib.ihs_wl_socket_name();
     return name == ffi.nullptr ? null : name.cast<Utf8>().toDartString();
+  }
+
+  /// A new xdg-activation token for a client about to be launched: start
+  /// it with the token in `XDG_ACTIVATION_TOKEN` and name the same token in
+  /// its `WaylandToplevelView`. [launch] does both halves of the first.
+  String activationToken() => using((Arena arena) {
+    const int cap = 256;
+    final ffi.Pointer<ffi.Char> out = arena<ffi.Char>(cap);
+    final int rc = _lib.ihs_wl_activation_token(out, cap);
+    if (rc < 0) {
+      throw _error('ihs_wl_activation_token', rc);
+    }
+    return out.cast<Utf8>().toDartString(length: rc);
+  });
+
+  /// Start a client on this server with a new activation token, which a
+  /// `WaylandToplevelView` names to show it. [environment] is added to the
+  /// client's; `WAYLAND_DISPLAY` and `XDG_ACTIVATION_TOKEN` are set here.
+  /// The client shares the app's stdout and stderr unless [mode] says
+  /// otherwise; with pipes, read them, or a chatty client stalls.
+  Future<({Process process, String token})> launch(
+    String executable,
+    List<String> arguments, {
+    Map<String, String>? environment,
+    ProcessStartMode mode = ProcessStartMode.inheritStdio,
+  }) async {
+    final String? socket = socketName;
+    if (socket == null) {
+      throw WaylandServerException(
+        'launch',
+        IhsWlResult.IHS_WL_RESULT_ERR_NOT_RUNNING.value,
+        'server not running',
+      );
+    }
+    final String token = activationToken();
+    final Process process = await Process.start(
+      executable,
+      arguments,
+      environment: <String, String>{
+        ...?environment,
+        'WAYLAND_DISPLAY': socket,
+        'XDG_ACTIVATION_TOKEN': token,
+      },
+      mode: mode,
+    );
+    return (process: process, token: token);
   }
 
   /// Disconnect every client and stop the server.

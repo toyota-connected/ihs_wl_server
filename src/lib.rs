@@ -249,14 +249,32 @@ pub extern "C" fn ihs_wl_socket_name() -> *const c_char {
 /// Issue an xdg-activation token for a client about to be launched:
 /// the launcher exports it as `XDG_ACTIVATION_TOKEN` and passes the same
 /// token in the view's creationParams. Writes a NUL-terminated token of at
-/// most `cap` bytes to `out`; returns its length.
+/// most `cap` bytes to `out`; returns its length. Waits for the server
+/// thread, so not from a callback the server makes.
 ///
 /// # Safety
 /// `out` must be writable for `cap` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn ihs_wl_activation_token(out: *mut c_char, cap: usize) -> c_int {
-    let _ = (out, cap);
-    unsupported("ihs_wl_activation_token")
+    guard("ihs_wl_activation_token", || {
+        if out.is_null() {
+            return Err(Error::invalid("out is null"));
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        thread::send(thread::Cmd::IssueToken(tx))?;
+        let token = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .map_err(|e| Error::new(IhsWlResult::ErrInternal as i32, format!("no token: {e}")))?;
+        if token.len() >= cap {
+            return Err(Error::new(
+                IhsWlResult::ErrTooSmall as i32,
+                format!("token needs {} bytes", token.len() + 1),
+            ));
+        }
+        std::ptr::copy_nonoverlapping(token.as_ptr(), out as *mut u8, token.len());
+        *out.add(token.len()) = 0;
+        Ok(token.len() as c_int)
+    })
 }
 
 /// Pointer input for the view `view_id`. Any thread; only enqueues. Returns
@@ -342,15 +360,6 @@ pub extern "C" fn ihs_wl_focus(view_id: i32, focused: u32) -> c_int {
 #[no_mangle]
 pub extern "C" fn ihs_wl_last_error() -> *const c_char {
     LAST_ERROR.with(|e| e.borrow().as_ptr())
-}
-
-fn unsupported(name: &str) -> c_int {
-    guard(name, || {
-        Err(Error::new(
-            IhsWlResult::ErrUnsupported as c_int,
-            format!("{name}: not implemented yet"),
-        ))
-    })
 }
 
 /// Rust entry points, for tests and Rust embedders.
