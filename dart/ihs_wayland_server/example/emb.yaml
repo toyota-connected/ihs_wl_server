@@ -20,7 +20,7 @@ cross:
   augment:
     - pkg: ivi-homescreen-shared
       min: "1.0.0"
-      url: https://github.com/toyota-connected/ivi-homescreen/archive/d77bd3e479166bbe525bba9fcde2d3570f0a183c.tar.gz
+      url: https://github.com/toyota-connected/ivi-homescreen/archive/3d7a967134cd9384d7f9a40d2de7531abcdaf425.tar.gz
       subdir: shared
       build: cmake
       static: false
