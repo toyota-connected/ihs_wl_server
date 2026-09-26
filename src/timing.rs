@@ -14,10 +14,19 @@
 //! - wp_commit_timing_v1: an update targeted at a time is applied a refresh
 //!   ahead of the first vblank at or after it.
 //!
+//! Frame callbacks are sent on the same report.
+//!
 //! A view that is not on screen gets no reports, so a clock phase-locked to
 //! the last one stands in: it ticks at the display's refresh while there is
 //! anything to release, clearing the fifo barriers of updates nobody shows
-//! and applying timed updates when they are due.
+//! and applying timed updates when they are due. Their frame callbacks wait
+//! for the view to be shown again, as a compositor holds them for a hidden
+//! surface.
+//!
+//! A report that never comes must not stall a client either: a frame of a
+//! view on screen that goes unreported for STALE_NS has its barriers cleared
+//! and the view's frame callbacks sent, once. A frame that could not be
+//! submitted at all has them sent at the next refresh.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -46,7 +55,8 @@ const TARGET_SLACK_NS: u64 = 500_000;
 const MAX_IN_FLIGHT: usize = 16;
 
 /// How long a frame of a view on screen may go unreported before its fifo
-/// barriers are cleared anyway, so a client can always make progress.
+/// barriers are cleared and its frame callbacks sent anyway, so a client can
+/// always make progress.
 pub(crate) const STALE_NS: u64 = 250_000_000;
 
 /// CLOCK_MONOTONIC, which the shell's reports and wp_presentation use.
@@ -209,10 +219,6 @@ impl Taken {
         );
     }
 
-    pub fn has_barriers(&self) -> bool {
-        !self.barriers.is_empty()
-    }
-
     /// Nothing of it will be shown: the feedback is discarded, and the
     /// barriers are handed back to be cleared on the clock.
     pub fn not_shown(self) -> Vec<Barrier> {
@@ -232,6 +238,8 @@ struct Frame {
     shown: Vec<(u32, u64)>,
     feedback: Vec<(u32, u64, PresentationFeedbackCallback)>,
     barriers: Vec<Barrier>,
+    /// Gone stale on screen, and its frame callbacks sent for it.
+    flushed: bool,
 }
 
 impl Frame {
@@ -274,6 +282,7 @@ impl Frames {
             shown,
             feedback: Vec::with_capacity(taken.feedback.len()),
             barriers: taken.barriers,
+            flushed: false,
         };
         for (layer_id, generation, cb) in taken.feedback {
             if frame.shows(layer_id, generation) {
@@ -340,11 +349,26 @@ impl Frames {
         self.release_older(u64::MAX)
     }
 
-    /// When the oldest frame still holding a barrier goes stale.
-    pub fn next_stale(&self) -> Option<u64> {
+    /// Take the frames submitted before @p before_ns as unreported on
+    /// screen. Returns whether one was not already: then the view's frame
+    /// callbacks are due.
+    pub fn flush_older(&mut self, before_ns: u64) -> bool {
+        let mut flushed = false;
+        for frame in self.frames.iter_mut() {
+            if frame.submitted_ns < before_ns && !frame.flushed {
+                frame.flushed = true;
+                flushed = true;
+            }
+        }
+        flushed
+    }
+
+    /// When the oldest frame with something still to release goes stale:
+    /// a barrier, or, @p on_screen, frame callbacks not yet sent for it.
+    pub fn next_stale(&self, on_screen: bool) -> Option<u64> {
         self.frames
             .iter()
-            .find(|f| !f.barriers.is_empty())
+            .find(|f| !f.barriers.is_empty() || (on_screen && !f.flushed))
             .map(|f| f.submitted_ns.saturating_add(STALE_NS))
     }
 

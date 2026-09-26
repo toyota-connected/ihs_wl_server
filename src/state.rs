@@ -104,6 +104,9 @@ pub struct State {
     pub timed: Vec<Weak<WlSurface>>,
     /// Fifo barriers of updates no view shows.
     pub loose: Vec<Loose>,
+    /// Views whose last frame could not be submitted, and when their frame
+    /// callbacks are due.
+    pub unsubmitted: Vec<(i32, u64)>,
     /// The clock's next tick, while anything waits on it.
     pub tick: Option<(RegistrationToken, u64)>,
 
@@ -195,6 +198,7 @@ impl State {
             clock: FrameClock::default(),
             timed: Vec::new(),
             loose: Vec::new(),
+            unsubmitted: Vec::new(),
             tick: None,
             waits: HashMap::new(),
             next_wait: 0,
