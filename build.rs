@@ -17,12 +17,13 @@ use std::path::PathBuf;
 const ABI_MINOR: u32 = 16;
 
 /// `pub const IHS_SHARED_ABI_<field>: u32 = N;` in the generated bindings.
+/// Matched without whitespace: with no rustfmt to run (a Yocto build),
+/// bindgen leaves its output unformatted, as `IHS_SHARED_ABI_MAJOR : u32 = 1 ;`.
 fn abi(bindings: &str, field: &str) -> Option<u32> {
-    let name = format!("pub const IHS_SHARED_ABI_{field}: u32 = ");
-    bindings
-        .lines()
-        .find_map(|l| l.trim().strip_prefix(&name))
-        .and_then(|v| v.trim_end_matches(';').parse().ok())
+    let compact: String = bindings.chars().filter(|c| !c.is_whitespace()).collect();
+    let key = format!("constIHS_SHARED_ABI_{field}:u32=");
+    let rest = &compact[compact.find(&key)? + key.len()..];
+    rest.split(';').next()?.parse().ok()
 }
 
 fn main() {
