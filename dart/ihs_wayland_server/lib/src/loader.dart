@@ -3,14 +3,16 @@
 
 // Finds libihs_wl_server.so, which hook/build.dart builds and the app bundles.
 //
-// In order:
+// In order, the app's own copy before any other, so that apps on one machine
+// can each carry their own version:
 //   1. IHS_WL_LIB
-//   2. dlopen by name: the embedder's RUNPATH, ld.so.cache
-//   3. beside a loaded libapp.so / libflutter_*.so (/proc/self/maps), or in
-//      the bundle's flutter_assets/native_assets/linux/: ivi-homescreen lives
-//      outside the bundle, so 2 misses it
-//   4. the hook's cargo output under .dart_tool/hooks_runner, newest first:
+//   2. the bundle: beside a loaded libapp.so / libflutter_*.so
+//      (/proc/self/maps), in lib/native_assets/ there (meta-flutter), or in
+//      the bundle's flutter_assets/native_assets/linux/
+//   3. the hook's cargo output under .dart_tool/hooks_runner, newest first:
 //      flutter test, dart run
+//   4. dlopen by name: the embedder's RUNPATH, ld.so.cache (a library
+//      installed by the system, system_library)
 
 import 'dart:ffi';
 import 'dart:io';
@@ -22,13 +24,7 @@ DynamicLibrary loadIhsWl() {
   if (env != null && env.isNotEmpty) return DynamicLibrary.open(env);
 
   final errors = <String>[];
-  try {
-    return DynamicLibrary.open(_libName);
-  } on ArgumentError catch (e) {
-    errors.add('$_libName: $e');
-  }
-
-  for (final path in [?_besideLoadedBundle(), ?_newestHookBuild()]) {
+  for (final path in [?_besideLoadedBundle(), ?_newestHookBuild(), _libName]) {
     try {
       return DynamicLibrary.open(path);
     } on ArgumentError catch (e) {
@@ -36,29 +32,35 @@ DynamicLibrary loadIhsWl() {
     }
   }
   throw StateError(
-    'cannot load $_libName: install it (e.g. the ihs-wl-server package), '
-    'depend on this package from the ihs_wl_server repository so its build '
-    'hook builds it, or set IHS_WL_LIB\n${errors.join('\n')}',
+    'cannot load $_libName: depend on this package from the ihs_wl_server '
+    'repository so its build hook builds it into the bundle, install it, or '
+    'set IHS_WL_LIB\n${errors.join('\n')}',
   );
 }
 
 String? _besideLoadedBundle() {
   try {
-    final dirs = <String>{};
+    // libapp.so's directory first: a bundled libflutter_engine.so can be a
+    // symlink into /usr/lib, which maps show resolved.
+    final app = <String>{}, engine = <String>{};
     for (final line in File('/proc/self/maps').readAsLinesSync()) {
       final path = line.substring(line.lastIndexOf(' ') + 1);
       final slash = path.lastIndexOf('/');
       if (!path.startsWith('/') || slash <= 0) continue;
       final base = path.substring(slash + 1);
-      if (base == 'libapp.so' || base.startsWith('libflutter_')) {
-        dirs.add(path.substring(0, slash));
+      if (base == 'libapp.so') {
+        app.add(path.substring(0, slash));
+      } else if (base.startsWith('libflutter_')) {
+        engine.add(path.substring(0, slash));
       }
     }
-    for (final dir in dirs) {
-      // lib/ itself, or where `flutter build bundle` leaves native assets:
+    for (final dir in {...app, ...engine}) {
+      // lib/ itself, lib/native_assets/ (meta-flutter), or where `flutter
+      // build bundle` leaves native assets:
       // <bundle>/data/flutter_assets/native_assets/linux/.
       for (final candidate in [
         File('$dir/$_libName'),
+        File('$dir/native_assets/$_libName'),
         File('$dir/../data/flutter_assets/native_assets/linux/$_libName'),
       ]) {
         if (candidate.existsSync()) return candidate.absolute.path;

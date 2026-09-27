@@ -3,15 +3,17 @@
 
 // Builds libihs_wl_server.so from the crate at the repository root with cargo
 // and bundles it as this package's code asset -- when that crate is there: a
-// path or git dependency on the repository. The package as published carries
-// no Rust, so from pub.dev nothing is built and the app loads an installed
-// libihs_wl_server.so (a Yocto image's ihs-wl-server package, say), as with
-// system_library below.
+// path or git dependency on the repository. The library then ships in the
+// app's bundle at the version the app's pubspec.lock pins, and the loader
+// prefers it to any other. The package as published carries no Rust, so from
+// pub.dev nothing is built and the app loads an installed libihs_wl_server.so,
+// as with system_library below.
 //
 // Hooks run with a filtered environment: PATH and HOME pass, PKG_CONFIG_* does
 // not, and CARGO_* only with newer hooks runners. So:
 //   - a cross build puts a `cargo` wrapper first on PATH that sets the target,
-//     CARGO_HOME, PKG_CONFIG_* and the like (meta-flutter does); without one
+//     CARGO_HOME, PKG_CONFIG_* and the like (meta-flutter's
+//     flutter-app-native with FLUTTER_NATIVE_CARGO does); without one
 //     the target is <arch>-unknown-linux-gnu from the hook config, unless
 //     CARGO_BUILD_TARGET gets through
 //   - ivi-homescreen-shared.pc outside the default search path is named by the
@@ -26,8 +28,7 @@
 //
 //             cargo_features: [egl-wl-display]
 //
-//   - a library installed by the system (a Yocto image's ihs-wl-server
-//     package, say) rather than built here:
+//   - a library installed by the system rather than built here:
 //
 //             system_library: true
 //

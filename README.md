@@ -152,18 +152,30 @@ sets them for you.
 
 ### Yocto
 
-meta-flutter's `ihs-wl-server` recipe builds and installs the library;
-`PACKAGECONFIG` `egl-wl-display` turns on the cargo feature. The Rust each
-release needs:
+On meta-flutter master the library is built per app, by the package's build
+hook, and ships in the app's bundle at the version the app's pubspec pins. The
+app recipe inherits `flutter-app-native` with `FLUTTER_NATIVE_CARGO = "1"`,
+which vendors the crates while the pub cache is fetched and gives the hook a
+cargo wrapper for the target, and depends on what the crate links:
+
+```bitbake
+DEPENDS += "ivi-homescreen-shared libdrm libxkbcommon virtual/libgbm"
+FLUTTER_NATIVE_CARGO = "1"
+inherit flutter-app-native
+```
+
+meta-flutter's `ihs-wl-server-example` recipe builds the example this way.
+The Rust each release needs:
 
 | Release | Rust | Layers |
 |---|---|---|
 | master | 1.98.1 | oe-core |
 | wrynose | 1.94.1 | oe-core |
-| scarthgap | 1.98.1 | meta-lts-mixins `scarthgap/rust` and meta-clang; the recipe is a dynamic layer on the former |
+| scarthgap | 1.98.1 | meta-lts-mixins `scarthgap/rust` and meta-clang |
 
-An app built in the image takes the installed library instead of building
-its own; name it in the app's pubspec:
+On wrynose and scarthgap, meta-flutter's `ihs-wl-server` recipe installs the
+library system-wide instead (on scarthgap as a dynamic layer on the mixin);
+an app there takes it with:
 
 ```yaml
 hooks:
