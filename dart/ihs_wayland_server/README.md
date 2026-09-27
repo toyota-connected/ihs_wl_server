@@ -13,18 +13,21 @@ Linux only.
 
 - ivi-homescreen with platform-view ABI 1.16 or newer.
 - `libihs_wl_server.so`, obtained one of two ways:
-  - **Installed.** A Yocto image with meta-flutter's `ihs-wl-server` recipe,
-    or a library built and installed from the ihs_wl_server repository. The
-    package loads it by name, or from `IHS_WL_LIB`.
   - **Built by the package.** Depended on from the ihs_wl_server repository
     (a git or path dependency), the package's build hook builds the crate
-    with cargo as part of the app's build and bundles the library. This needs
-    Rust and ivi-homescreen's `libihs_shared`; see the repository's README.
+    with cargo as part of the app's build and bundles the library, at the
+    version the app's `pubspec.lock` pins; apps on one machine can each carry
+    their own. This needs Rust and ivi-homescreen's `libihs_shared`; see the
+    repository's README. In Yocto, meta-flutter's `flutter-app-native` class
+    with `FLUTTER_NATIVE_CARGO = "1"` runs the build.
+  - **Installed.** A library built and installed from the ihs_wl_server
+    repository, loaded by name or from `IHS_WL_LIB`.
 
-From pub.dev nothing is built: the installed library is used.
+The app's bundled copy is loaded before an installed one. From pub.dev
+nothing is built: the installed library is used.
 
-An app built in a Yocto image names the installed library in its pubspec so
-the hook never builds one:
+An app that takes the installed library names it in its pubspec so the hook
+never builds one:
 
 ```yaml
 hooks:
