@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Builds libihs_wl_server.so from the crate at the repository root with cargo
-// and bundles it as this package's code asset.
+// and bundles it as this package's code asset -- when that crate is there: a
+// path or git dependency on the repository. The package as published carries
+// no Rust, so from pub.dev nothing is built and the app loads an installed
+// libihs_wl_server.so (a Yocto image's ihs-wl-server package, say), as with
+// system_library below.
 //
 // Hooks run with a filtered environment: PATH and HOME pass, PKG_CONFIG_* does
 // not, and CARGO_* only with newer hooks runners. So:
@@ -53,8 +57,10 @@ void main(List<String> args) async {
 
     final crateDir = input.packageRoot.resolve('../../');
     final manifest = File.fromUri(crateDir.resolve('Cargo.toml'));
-    if (!manifest.existsSync()) {
-      throw StateError('no Cargo.toml at ${manifest.path}');
+    // Not inside the repository (from pub.dev): the library is installed.
+    if (!manifest.existsSync() ||
+        !manifest.readAsStringSync().contains('name = "$_crate"')) {
+      return;
     }
 
     final env = <String, String>{};

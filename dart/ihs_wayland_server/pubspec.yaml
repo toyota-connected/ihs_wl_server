@@ -6,7 +6,14 @@ description: >-
   Dart side of ihs_wl_server: start the embedded Wayland server and show a
   client toplevel as an ivi-homescreen platform view.
 version: 0.1.0
-publish_to: 'none'
+homepage: https://github.com/toyota-connected/ihs_wl_server
+repository: https://github.com/toyota-connected/ihs_wl_server/tree/main/dart/ihs_wayland_server
+issue_tracker: https://github.com/toyota-connected/ihs_wl_server/issues
+topics: [wayland, embedded, platform-views, ivi-homescreen]
+
+# The Wayland server and ivi-homescreen are Linux only.
+platforms:
+  linux:
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
