@@ -13,38 +13,35 @@ import 'dart:ffi' as ffi;
 class IhsWlBindings {
   /// Holds the symbol lookup function.
   final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
-      _lookup;
+  _lookup;
 
   /// The symbols are looked up in [dynamicLibrary].
   IhsWlBindings(ffi.DynamicLibrary dynamicLibrary)
-      : _lookup = dynamicLibrary.lookup;
+    : _lookup = dynamicLibrary.lookup;
 
   /// The symbols are looked up with [lookup].
   IhsWlBindings.fromLookup(
-      ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
-          lookup)
-      : _lookup = lookup;
+    ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName) lookup,
+  ) : _lookup = lookup;
 
-  int ihs_wl_start(
-    ffi.Pointer<IhsWlConfig> cfg,
-  ) {
-    return _ihs_wl_start(
-      cfg,
-    );
+  int ihs_wl_start(ffi.Pointer<IhsWlConfig> cfg) {
+    return _ihs_wl_start(cfg);
   }
 
   late final _ihs_wl_startPtr =
       _lookup<ffi.NativeFunction<ffi.Int Function(ffi.Pointer<IhsWlConfig>)>>(
-          'ihs_wl_start');
-  late final _ihs_wl_start =
-      _ihs_wl_startPtr.asFunction<int Function(ffi.Pointer<IhsWlConfig>)>();
+        'ihs_wl_start',
+      );
+  late final _ihs_wl_start = _ihs_wl_startPtr
+      .asFunction<int Function(ffi.Pointer<IhsWlConfig>)>();
 
   void ihs_wl_stop() {
     return _ihs_wl_stop();
   }
 
-  late final _ihs_wl_stopPtr =
-      _lookup<ffi.NativeFunction<ffi.Void Function()>>('ihs_wl_stop');
+  late final _ihs_wl_stopPtr = _lookup<ffi.NativeFunction<ffi.Void Function()>>(
+    'ihs_wl_stop',
+  );
   late final _ihs_wl_stop = _ihs_wl_stopPtr.asFunction<void Function()>();
 
   ffi.Pointer<ffi.Char> ihs_wl_socket_name() {
@@ -53,97 +50,71 @@ class IhsWlBindings {
 
   late final _ihs_wl_socket_namePtr =
       _lookup<ffi.NativeFunction<ffi.Pointer<ffi.Char> Function()>>(
-          'ihs_wl_socket_name');
-  late final _ihs_wl_socket_name =
-      _ihs_wl_socket_namePtr.asFunction<ffi.Pointer<ffi.Char> Function()>();
+        'ihs_wl_socket_name',
+      );
+  late final _ihs_wl_socket_name = _ihs_wl_socket_namePtr
+      .asFunction<ffi.Pointer<ffi.Char> Function()>();
 
-  int ihs_wl_activation_token(
-    ffi.Pointer<ffi.Char> out,
-    int cap,
-  ) {
-    return _ihs_wl_activation_token(
-      out,
-      cap,
-    );
+  int ihs_wl_activation_token(ffi.Pointer<ffi.Char> out, int cap) {
+    return _ihs_wl_activation_token(out, cap);
   }
 
-  late final _ihs_wl_activation_tokenPtr = _lookup<
-          ffi
-          .NativeFunction<ffi.Int Function(ffi.Pointer<ffi.Char>, ffi.Size)>>(
-      'ihs_wl_activation_token');
+  late final _ihs_wl_activation_tokenPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int Function(ffi.Pointer<ffi.Char>, ffi.Size)>
+      >('ihs_wl_activation_token');
   late final _ihs_wl_activation_token = _ihs_wl_activation_tokenPtr
       .asFunction<int Function(ffi.Pointer<ffi.Char>, int)>();
 
-  int ihs_wl_pointer(
-    int view_id,
-    ffi.Pointer<IhsWlPointerEvent> ev,
-  ) {
-    return _ihs_wl_pointer(
-      view_id,
-      ev,
-    );
+  int ihs_wl_pointer(int view_id, ffi.Pointer<IhsWlPointerEvent> ev) {
+    return _ihs_wl_pointer(view_id, ev);
   }
 
-  late final _ihs_wl_pointerPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Int Function(
-              ffi.Int32, ffi.Pointer<IhsWlPointerEvent>)>>('ihs_wl_pointer');
+  late final _ihs_wl_pointerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Int32, ffi.Pointer<IhsWlPointerEvent>)
+        >
+      >('ihs_wl_pointer');
   late final _ihs_wl_pointer = _ihs_wl_pointerPtr
       .asFunction<int Function(int, ffi.Pointer<IhsWlPointerEvent>)>();
 
-  int ihs_wl_touch(
-    int view_id,
-    ffi.Pointer<IhsWlTouchEvent> ev,
-  ) {
-    return _ihs_wl_touch(
-      view_id,
-      ev,
-    );
+  int ihs_wl_touch(int view_id, ffi.Pointer<IhsWlTouchEvent> ev) {
+    return _ihs_wl_touch(view_id, ev);
   }
 
-  late final _ihs_wl_touchPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Int Function(
-              ffi.Int32, ffi.Pointer<IhsWlTouchEvent>)>>('ihs_wl_touch');
+  late final _ihs_wl_touchPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Int32, ffi.Pointer<IhsWlTouchEvent>)
+        >
+      >('ihs_wl_touch');
   late final _ihs_wl_touch = _ihs_wl_touchPtr
       .asFunction<int Function(int, ffi.Pointer<IhsWlTouchEvent>)>();
 
-  int ihs_wl_key(
-    int view_id,
-    int evdev,
-    int pressed,
-    int time_us,
-  ) {
-    return _ihs_wl_key(
-      view_id,
-      evdev,
-      pressed,
-      time_us,
-    );
+  int ihs_wl_key(int view_id, int evdev, int pressed, int time_us) {
+    return _ihs_wl_key(view_id, evdev, pressed, time_us);
   }
 
-  late final _ihs_wl_keyPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Int Function(
-              ffi.Int32, ffi.Uint32, ffi.Uint32, ffi.Uint64)>>('ihs_wl_key');
-  late final _ihs_wl_key =
-      _ihs_wl_keyPtr.asFunction<int Function(int, int, int, int)>();
+  late final _ihs_wl_keyPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Int32, ffi.Uint32, ffi.Uint32, ffi.Uint64)
+        >
+      >('ihs_wl_key');
+  late final _ihs_wl_key = _ihs_wl_keyPtr
+      .asFunction<int Function(int, int, int, int)>();
 
-  int ihs_wl_focus(
-    int view_id,
-    int focused,
-  ) {
-    return _ihs_wl_focus(
-      view_id,
-      focused,
-    );
+  int ihs_wl_focus(int view_id, int focused) {
+    return _ihs_wl_focus(view_id, focused);
   }
 
   late final _ihs_wl_focusPtr =
       _lookup<ffi.NativeFunction<ffi.Int Function(ffi.Int32, ffi.Uint32)>>(
-          'ihs_wl_focus');
-  late final _ihs_wl_focus =
-      _ihs_wl_focusPtr.asFunction<int Function(int, int)>();
+        'ihs_wl_focus',
+      );
+  late final _ihs_wl_focus = _ihs_wl_focusPtr
+      .asFunction<int Function(int, int)>();
 
   ffi.Pointer<ffi.Char> ihs_wl_last_error() {
     return _ihs_wl_last_error();
@@ -151,9 +122,10 @@ class IhsWlBindings {
 
   late final _ihs_wl_last_errorPtr =
       _lookup<ffi.NativeFunction<ffi.Pointer<ffi.Char> Function()>>(
-          'ihs_wl_last_error');
-  late final _ihs_wl_last_error =
-      _ihs_wl_last_errorPtr.asFunction<ffi.Pointer<ffi.Char> Function()>();
+        'ihs_wl_last_error',
+      );
+  late final _ihs_wl_last_error = _ihs_wl_last_errorPtr
+      .asFunction<ffi.Pointer<ffi.Char> Function()>();
 }
 
 enum IhsWlResult {
@@ -170,16 +142,16 @@ enum IhsWlResult {
   const IhsWlResult(this.value);
 
   static IhsWlResult fromValue(int value) => switch (value) {
-        0 => IHS_WL_RESULT_OK,
-        -1 => IHS_WL_RESULT_ERR_INVALID,
-        -2 => IHS_WL_RESULT_ERR_ALREADY_RUNNING,
-        -3 => IHS_WL_RESULT_ERR_NOT_RUNNING,
-        -4 => IHS_WL_RESULT_ERR_IO,
-        -5 => IHS_WL_RESULT_ERR_INTERNAL,
-        -6 => IHS_WL_RESULT_ERR_UNSUPPORTED,
-        -7 => IHS_WL_RESULT_ERR_TOO_SMALL,
-        _ => throw ArgumentError('Unknown value for IhsWlResult: $value'),
-      };
+    0 => IHS_WL_RESULT_OK,
+    -1 => IHS_WL_RESULT_ERR_INVALID,
+    -2 => IHS_WL_RESULT_ERR_ALREADY_RUNNING,
+    -3 => IHS_WL_RESULT_ERR_NOT_RUNNING,
+    -4 => IHS_WL_RESULT_ERR_IO,
+    -5 => IHS_WL_RESULT_ERR_INTERNAL,
+    -6 => IHS_WL_RESULT_ERR_UNSUPPORTED,
+    -7 => IHS_WL_RESULT_ERR_TOO_SMALL,
+    _ => throw ArgumentError('Unknown value for IhsWlResult: $value'),
+  };
 }
 
 enum IhsWlPointerKind {
@@ -193,13 +165,13 @@ enum IhsWlPointerKind {
   const IhsWlPointerKind(this.value);
 
   static IhsWlPointerKind fromValue(int value) => switch (value) {
-        0 => IHS_WL_POINTER_KIND_ENTER,
-        1 => IHS_WL_POINTER_KIND_LEAVE,
-        2 => IHS_WL_POINTER_KIND_MOTION,
-        3 => IHS_WL_POINTER_KIND_BUTTON,
-        4 => IHS_WL_POINTER_KIND_AXIS,
-        _ => throw ArgumentError('Unknown value for IhsWlPointerKind: $value'),
-      };
+    0 => IHS_WL_POINTER_KIND_ENTER,
+    1 => IHS_WL_POINTER_KIND_LEAVE,
+    2 => IHS_WL_POINTER_KIND_MOTION,
+    3 => IHS_WL_POINTER_KIND_BUTTON,
+    4 => IHS_WL_POINTER_KIND_AXIS,
+    _ => throw ArgumentError('Unknown value for IhsWlPointerKind: $value'),
+  };
 }
 
 enum IhsWlTouchKind {
@@ -213,13 +185,13 @@ enum IhsWlTouchKind {
   const IhsWlTouchKind(this.value);
 
   static IhsWlTouchKind fromValue(int value) => switch (value) {
-        0 => IHS_WL_TOUCH_KIND_DOWN,
-        1 => IHS_WL_TOUCH_KIND_UP,
-        2 => IHS_WL_TOUCH_KIND_MOTION,
-        3 => IHS_WL_TOUCH_KIND_CANCEL,
-        4 => IHS_WL_TOUCH_KIND_FRAME,
-        _ => throw ArgumentError('Unknown value for IhsWlTouchKind: $value'),
-      };
+    0 => IHS_WL_TOUCH_KIND_DOWN,
+    1 => IHS_WL_TOUCH_KIND_UP,
+    2 => IHS_WL_TOUCH_KIND_MOTION,
+    3 => IHS_WL_TOUCH_KIND_CANCEL,
+    4 => IHS_WL_TOUCH_KIND_FRAME,
+    _ => throw ArgumentError('Unknown value for IhsWlTouchKind: $value'),
+  };
 }
 
 final class IhsWlConfig extends ffi.Struct {

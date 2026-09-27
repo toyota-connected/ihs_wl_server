@@ -36,7 +36,9 @@ DynamicLibrary loadIhsWl() {
     }
   }
   throw StateError(
-    'cannot load $_libName; set IHS_WL_LIB\n${errors.join('\n')}',
+    'cannot load $_libName: install it (e.g. the ihs-wl-server package), '
+    'depend on this package from the ihs_wl_server repository so its build '
+    'hook builds it, or set IHS_WL_LIB\n${errors.join('\n')}',
   );
 }
 
