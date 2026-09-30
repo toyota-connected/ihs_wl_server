@@ -219,8 +219,11 @@ Vulkan clients:
 
 Shell issues found this way:
 
-- drm-kms-egl stops presenting after a client maximizes
-  ([ivi-homescreen#690](https://github.com/toyota-connected/ivi-homescreen/issues/690)).
+- drm-kms-egl stopped presenting after a client maximized: each resize leaked
+  a client buffer until the client ran out
+  ([ivi-homescreen#690](https://github.com/toyota-connected/ivi-homescreen/issues/690),
+  fixed in
+  [#695](https://github.com/toyota-connected/ivi-homescreen/pull/695)).
 - drm-kms-vulkan could not import small, exactly sized dma-bufs on v3dv, so
   GTK menus never appeared
   ([#691](https://github.com/toyota-connected/ivi-homescreen/issues/691),
