@@ -32,6 +32,8 @@ pub struct ViewParams {
     /// The size to ask the client for instead of the view's, in logical
     /// pixels; both of `requested_width` and `requested_height`, positive.
     pub requested: Option<(i32, i32)>,
+    /// `IhsWlCapability` bits the app handles; unknown bits are dropped.
+    pub capabilities: u32,
 }
 
 impl ViewParams {
@@ -54,6 +56,10 @@ impl ViewParams {
                 positive("requested_width").unwrap_or(0.0),
                 positive("requested_height").unwrap_or(0.0),
             ),
+            capabilities: match map.get("capabilities") {
+                Some(Value::Int(i)) => (*i as u32) & crate::CAPABILITY_ALL,
+                _ => 0,
+            },
         }
     }
 }
@@ -203,6 +209,16 @@ mod tests {
         assert_eq!(map(Some(800), Some(0)), None);
         assert_eq!(map(Some(-1), Some(600)), None);
         assert_eq!(ViewParams::decode(&encoded()).requested, None);
+    }
+
+    #[test]
+    fn decodes_capabilities_dropping_unknown_bits() {
+        let mut b = vec![T_MAP, 1, T_STRING, 12];
+        b.extend_from_slice(b"capabilities");
+        b.push(T_INT64);
+        b.extend_from_slice(&(0x1_05i64).to_le_bytes());
+        assert_eq!(ViewParams::decode(&b).capabilities, 5);
+        assert_eq!(ViewParams::decode(&encoded()).capabilities, 0);
     }
 
     #[test]

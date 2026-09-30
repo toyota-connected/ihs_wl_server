@@ -5,7 +5,7 @@
   touch, keyboard and cursor input; `requestedSize` to configure the client
   to a size of its own, scaled to fit the view), and
   `WaylandToplevelController` (bound or closed, the client's window-state
-  requests, `close()`).
+  requests and the buttons it shows for them, `close()`).
 - Build hook builds libihs_wl_server from the repository into the app's
   bundle, or uses the installed library (`system_library`, or when not inside
   the repository). The bundled copy is loaded first.

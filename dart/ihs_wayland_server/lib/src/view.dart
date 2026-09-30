@@ -135,6 +135,8 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   void _created(int id) {
     _viewId = id;
     widget.controller?._attach(id, _bound);
+    // As the creation params carried it; the controller may have changed.
+    waylandInput?.setCapabilities(id, widget.controller?._capabilityBits ?? 0);
     // The creation params carry the size the view was built with; this one
     // may have changed since.
     waylandInput?.requestSize(id, widget.requestedSize);
@@ -149,6 +151,13 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
     if (widget.controller != oldWidget.controller) {
       oldWidget.controller?._attach(null, false);
       widget.controller?._attach(_viewId, _bound);
+      final int? id = _viewId;
+      if (id != null) {
+        waylandInput?.setCapabilities(
+          id,
+          widget.controller?._capabilityBits ?? 0,
+        );
+      }
     }
     final int? id = _viewId;
     if (id != null && widget.requestedSize != oldWidget.requestedSize) {
@@ -246,6 +255,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                         'token': widget.activationToken,
                         'app_id': widget.appId,
                         'dpr': dpr,
+                        'capabilities': widget.controller?._capabilityBits ?? 0,
                         'requested_width': widget.requestedSize?.width,
                         'requested_height': widget.requestedSize?.height,
                       },

@@ -243,4 +243,9 @@ class WaylandInput {
 
   /// Ask the client of the view's toplevel to close it.
   void closeView(int viewId) => _lib.ihs_wl_view_close(viewId);
+
+  /// The window-state changes the app handles for the view, as
+  /// `IhsWlCapability` bits.
+  void setCapabilities(int viewId, int bits) =>
+      _lib.ihs_wl_view_capabilities(viewId, bits);
 }

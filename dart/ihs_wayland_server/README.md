@@ -72,10 +72,12 @@ shows and closes it:
 
 ```dart
 final controller = WaylandToplevelController(
+  // The client shows buttons for these and no others; none by default.
+  windowCapabilities: {WaylandWindowCapability.maximize},
   onWindowRequest: (request) {
-    // maximize, unmaximize, minimize, fullscreen, unfullscreen: the
-    // client's own buttons. The toplevel stays the view's size; resize or
-    // hide the view as the app sees fit.
+    // maximize, unmaximize (and minimize, fullscreen, unfullscreen when
+    // handled): the client's own buttons. The toplevel stays the view's
+    // size; resize or hide the view as the app sees fit.
   },
 );
 controller.addListener(() {

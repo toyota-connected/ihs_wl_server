@@ -11,18 +11,34 @@ use smithay::wayland::shell::xdg::{
 
 use crate::observe::{self, Observed};
 use crate::state::{app_id_and_title, State, Toplevels};
-use crate::IhsWlViewEvent;
+use crate::{IhsWlCapability, IhsWlViewEvent};
 
 impl State {
-    /// The view showing toplevel @p surface, if one does.
-    fn view_showing(&self, surface: &ToplevelSurface) -> Option<i32> {
+    /// The view showing toplevel @p surface, if one does and its app
+    /// handles @p capability.
+    fn view_handling(&self, surface: &ToplevelSurface, capability: IhsWlCapability) -> Option<i32> {
         let id = Toplevels::id_of(surface.wl_surface())?;
-        self.toplevels.by_id.get(&id)?.view
+        let view_id = self.toplevels.by_id.get(&id)?.view?;
+        let handled = self.views.get(&view_id)?.capabilities & capability as u32 != 0;
+        handled.then_some(view_id)
     }
 
-    /// Pass a window-state request of @p surface to the app showing it.
+    /// Pass a window-state request of @p surface to the app showing it, if
+    /// it handles that; xdg-shell has requests for capabilities not
+    /// advertised ignored (a client older than wm_capabilities may send
+    /// them).
     fn post_request(&self, surface: &ToplevelSurface, event: IhsWlViewEvent) {
-        if let Some(view_id) = self.view_showing(surface) {
+        let capability = match event {
+            IhsWlViewEvent::MaximizeRequested | IhsWlViewEvent::UnmaximizeRequested => {
+                IhsWlCapability::Maximize
+            }
+            IhsWlViewEvent::MinimizeRequested => IhsWlCapability::Minimize,
+            IhsWlViewEvent::FullscreenRequested | IhsWlViewEvent::UnfullscreenRequested => {
+                IhsWlCapability::Fullscreen
+            }
+            IhsWlViewEvent::Bound | IhsWlViewEvent::Closed => return,
+        };
+        if let Some(view_id) = self.view_handling(surface, capability) {
             tracing::debug!(view_id, ?event, "window request");
             crate::events::post(event, view_id);
         }

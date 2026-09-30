@@ -15,6 +15,22 @@ enum WaylandWindowRequest {
   unfullscreen,
 }
 
+/// A window-state change the app handles for a view. Its client shows the
+/// buttons for these and no others, and its [WaylandWindowRequest]s for
+/// others are not reported.
+enum WaylandWindowCapability {
+  /// Maximize and restore.
+  maximize(1),
+  minimize(2),
+
+  /// Fullscreen and back.
+  fullscreen(4);
+
+  const WaylandWindowCapability(this._bit);
+
+  final int _bit;
+}
+
 /// Controls the client toplevel a `WaylandToplevelView` shows, and reports
 /// what happens to it.
 ///
@@ -23,10 +39,39 @@ enum WaylandWindowRequest {
 /// close button, or quitting). The view then shows nothing until another
 /// matching toplevel maps.
 class WaylandToplevelController extends ChangeNotifier {
-  WaylandToplevelController({this.onWindowRequest});
+  WaylandToplevelController({
+    this.onWindowRequest,
+    Set<WaylandWindowCapability> windowCapabilities =
+        const <WaylandWindowCapability>{},
+  }) : _capabilities = Set<WaylandWindowCapability>.unmodifiable(
+         windowCapabilities,
+       );
 
-  /// Called when the client asks to change its window state.
+  /// Called when the client asks to change its window state, for the
+  /// [windowCapabilities] the app handles.
   void Function(WaylandWindowRequest request)? onWindowRequest;
+
+  Set<WaylandWindowCapability> _capabilities;
+
+  /// The window-state changes the app handles: the client shows buttons for
+  /// these and no others. None by default.
+  Set<WaylandWindowCapability> get windowCapabilities => _capabilities;
+  set windowCapabilities(Set<WaylandWindowCapability> value) {
+    if (setEquals(value, _capabilities)) {
+      return;
+    }
+    _capabilities = Set<WaylandWindowCapability>.unmodifiable(value);
+    final int? id = _viewId;
+    if (id != null) {
+      waylandInput?.setCapabilities(id, _capabilityBits);
+    }
+  }
+
+  /// [windowCapabilities] as `IhsWlCapability` bits.
+  int get _capabilityBits => _capabilities.fold(
+    0,
+    (int bits, WaylandWindowCapability c) => bits | c._bit,
+  );
 
   int? _viewId;
   bool _bound = false;

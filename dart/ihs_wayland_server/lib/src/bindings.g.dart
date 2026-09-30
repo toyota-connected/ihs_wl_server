@@ -127,6 +127,17 @@ class IhsWlBindings {
   late final _ihs_wl_view_close = _ihs_wl_view_closePtr
       .asFunction<int Function(int)>();
 
+  int ihs_wl_view_capabilities(int view_id, int capabilities) {
+    return _ihs_wl_view_capabilities(view_id, capabilities);
+  }
+
+  late final _ihs_wl_view_capabilitiesPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function(ffi.Int32, ffi.Uint32)>>(
+        'ihs_wl_view_capabilities',
+      );
+  late final _ihs_wl_view_capabilities = _ihs_wl_view_capabilitiesPtr
+      .asFunction<int Function(int, int)>();
+
   int ihs_wl_set_event_port(
     ffi.Pointer<
       ffi.NativeFunction<
@@ -274,6 +285,22 @@ enum IhsWlViewEvent {
     6 => IHS_WL_VIEW_EVENT_FULLSCREEN_REQUESTED,
     7 => IHS_WL_VIEW_EVENT_UNFULLSCREEN_REQUESTED,
     _ => throw ArgumentError('Unknown value for IhsWlViewEvent: $value'),
+  };
+}
+
+enum IhsWlCapability {
+  IHS_WL_CAPABILITY_MAXIMIZE(1),
+  IHS_WL_CAPABILITY_MINIMIZE(2),
+  IHS_WL_CAPABILITY_FULLSCREEN(4);
+
+  final int value;
+  const IhsWlCapability(this.value);
+
+  static IhsWlCapability fromValue(int value) => switch (value) {
+    1 => IHS_WL_CAPABILITY_MAXIMIZE,
+    2 => IHS_WL_CAPABILITY_MINIMIZE,
+    4 => IHS_WL_CAPABILITY_FULLSCREEN,
+    _ => throw ArgumentError('Unknown value for IhsWlCapability: $value'),
   };
 }
 

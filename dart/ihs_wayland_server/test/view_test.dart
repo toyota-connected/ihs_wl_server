@@ -72,11 +72,19 @@ void main() {
     WidgetTester tester,
   ) async {
     int? viewId;
+    Map<Object?, Object?>? params;
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform_views,
       (MethodCall call) async {
         if (call.method == 'create') {
-          viewId = (call.arguments as Map<Object?, Object?>)['id']! as int;
+          final Map<Object?, Object?> args =
+              call.arguments as Map<Object?, Object?>;
+          viewId = args['id']! as int;
+          params =
+              const StandardMessageCodec().decodeMessage(
+                    ByteData.sublistView(args['params']! as Uint8List),
+                  )
+                  as Map<Object?, Object?>;
         }
         return null;
       },
@@ -84,6 +92,10 @@ void main() {
     final List<WaylandWindowRequest> requests = <WaylandWindowRequest>[];
     final WaylandToplevelController controller = WaylandToplevelController(
       onWindowRequest: requests.add,
+      windowCapabilities: const <WaylandWindowCapability>{
+        WaylandWindowCapability.maximize,
+        WaylandWindowCapability.fullscreen,
+      },
     );
     addTearDown(controller.dispose);
     int notified = 0;
@@ -98,6 +110,8 @@ void main() {
     await tester.pump();
     final int id = viewId!;
     expect(controller.isBound, isFalse);
+    // Maximize (1) and fullscreen (4).
+    expect(params?['capabilities'], 5);
 
     ViewEvents.dispatch(<int>[1, id]); // bound
     expect(controller.isBound, isTrue);
