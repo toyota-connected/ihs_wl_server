@@ -34,6 +34,8 @@ pub struct ViewParams {
     pub requested: Option<(i32, i32)>,
     /// `IhsWlCapability` bits the app handles; unknown bits are dropped.
     pub capabilities: u32,
+    /// `IhsWlWindowState` bits the app grants; unknown bits are dropped.
+    pub window_state: u32,
 }
 
 impl ViewParams {
@@ -58,6 +60,10 @@ impl ViewParams {
             ),
             capabilities: match map.get("capabilities") {
                 Some(Value::Int(i)) => (*i as u32) & crate::CAPABILITY_ALL,
+                _ => 0,
+            },
+            window_state: match map.get("window_state") {
+                Some(Value::Int(i)) => (*i as u32) & crate::WINDOW_STATE_ALL,
                 _ => 0,
             },
         }
@@ -212,12 +218,17 @@ mod tests {
     }
 
     #[test]
-    fn decodes_capabilities_dropping_unknown_bits() {
+    fn decodes_capabilities_and_state_dropping_unknown_bits() {
         let mut b = vec![T_MAP, 1, T_STRING, 12];
         b.extend_from_slice(b"capabilities");
         b.push(T_INT64);
         b.extend_from_slice(&(0x1_05i64).to_le_bytes());
         assert_eq!(ViewParams::decode(&b).capabilities, 5);
+        let mut b = vec![T_MAP, 1, T_STRING, 12];
+        b.extend_from_slice(b"window_state");
+        b.push(T_INT64);
+        b.extend_from_slice(&(0x1_02i64).to_le_bytes());
+        assert_eq!(ViewParams::decode(&b).window_state, 2);
         assert_eq!(ViewParams::decode(&encoded()).capabilities, 0);
     }
 

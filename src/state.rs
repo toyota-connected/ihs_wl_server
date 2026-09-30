@@ -149,6 +149,8 @@ pub struct ViewEntry {
     pub requested: Option<(i32, i32)>,
     /// The window-state changes the app handles (`IhsWlCapability` bits).
     pub capabilities: u32,
+    /// The window states the app grants (`IhsWlWindowState` bits).
+    pub window_state: u32,
 }
 
 /// Where the client's logical space sits in its view: scaled by `scale`
@@ -214,12 +216,20 @@ impl ViewEntry {
         self.requested.or_else(|| self.logical_size())
     }
 
-    /// Where its client's content sits in it.
-    pub fn fit(&self) -> Fit {
-        let (Some(requested), Some((w, h))) = (self.requested, self.size) else {
+    /// Where its client's content sits in it, @p window being the size of
+    /// the window the client committed: the size it was asked for, scaled to
+    /// fit the view -- or the window, when the client made it larger than
+    /// asked (a minimum size wider than the view, say), so none of it is cut
+    /// off.
+    pub fn fit(&self, window: Option<(i32, i32)>) -> Fit {
+        let (Some((w, h)), Some(asked)) = (self.size, self.client_size()) else {
             return Fit::IDENTITY;
         };
-        Fit::contain((w as f64 / self.dpr, h as f64 / self.dpr), requested)
+        let content = window.map_or(asked, |(ww, wh)| (asked.0.max(ww), asked.1.max(wh)));
+        if self.requested.is_none() && Some(content) == self.logical_size() {
+            return Fit::IDENTITY;
+        }
+        Fit::contain((w as f64 / self.dpr, h as f64 / self.dpr), content)
     }
 }
 
@@ -334,6 +344,7 @@ impl State {
                 let dpr = view.params.dpr.unwrap_or(1.0);
                 let requested = view.params.requested;
                 let capabilities = view.params.capabilities;
+                let window_state = view.params.window_state;
                 // One output stands for the display every view is on.
                 self.output
                     .change_current_state(None, None, Some(Scale::Fractional(dpr)), None);
@@ -358,6 +369,7 @@ impl State {
                         hidden_release_ns: 0,
                         requested,
                         capabilities,
+                        window_state,
                     },
                 );
                 self.try_bind_view(id);
@@ -391,6 +403,12 @@ impl State {
                 let toplevel = self.views.get(&view_id).and_then(|v| v.toplevel);
                 if let Some(t) = toplevel.and_then(|id| self.toplevels.by_id.get(&id)) {
                     t.surface.send_close();
+                }
+            }
+            Cmd::ViewState { view_id, state } => {
+                if let Some(entry) = self.views.get_mut(&view_id) {
+                    entry.window_state = state;
+                    self.configure_view(view_id);
                 }
             }
             Cmd::ViewCapabilities {
@@ -557,6 +575,16 @@ impl State {
         }
     }
 
+    /// Where view @p view_id's client content sits in it (ViewEntry::fit).
+    pub fn view_fit(&self, view_id: i32) -> Fit {
+        let window = self
+            .view_root(view_id)
+            .and_then(|root| crate::tree::geometry_size(&root));
+        self.views
+            .get(&view_id)
+            .map_or(Fit::IDENTITY, |v| v.fit(window))
+    }
+
     /// Show what view @p view_id last showed at its current fit. A commit
     /// would too, but a client keeping its size has none to make.
     fn refit_view(&mut self, view_id: i32) {
@@ -580,9 +608,18 @@ impl State {
         let activated = self.view_activated(view_id);
         let suspended = entry.suspended;
         let capabilities = wm_capabilities(entry.capabilities);
+        let granted = |s: crate::IhsWlWindowState| entry.window_state & s as u32 != 0;
+        let (fullscreen, mut maximized) = (
+            granted(crate::IhsWlWindowState::Fullscreen),
+            granted(crate::IhsWlWindowState::Maximized),
+        );
         let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };
+        // Tiled states came with xdg-shell v2: an older client told neither
+        // is maximized instead, so it still draws no border.
+        let tiled = t.surface.version() >= 2;
+        maximized |= !tiled && !fullscreen;
         let changed = t.surface.with_pending_state(|s| {
             let size = Some((w.max(1), h.max(1)).into());
             let before = (s.size, s.states.clone(), s.capabilities.clone());
@@ -590,8 +627,19 @@ impl State {
             // Buttons for what the app handles; smithay sends
             // wm_capabilities when this changes.
             s.capabilities.replace(capabilities);
-            // A tile the size of its view: no borders to draw, no resizing.
-            s.states.set(xdg_toplevel::State::Maximized);
+            // A tile the size of its view: no borders or shadows to draw, no
+            // resizing -- and maximized or fullscreen only when the app says
+            // so, so the client's buttons and keys ask for what they show.
+            for edge in [
+                xdg_toplevel::State::TiledLeft,
+                xdg_toplevel::State::TiledRight,
+                xdg_toplevel::State::TiledTop,
+                xdg_toplevel::State::TiledBottom,
+            ] {
+                set_state(&mut s.states, edge, tiled);
+            }
+            set_state(&mut s.states, xdg_toplevel::State::Maximized, maximized);
+            set_state(&mut s.states, xdg_toplevel::State::Fullscreen, fullscreen);
             set_state(&mut s.states, xdg_toplevel::State::Activated, activated);
             set_state(&mut s.states, xdg_toplevel::State::Suspended, suspended);
             before != (s.size, s.states.clone(), s.capabilities.clone())

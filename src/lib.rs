@@ -126,6 +126,21 @@ pub(crate) const CAPABILITY_ALL: u32 = IhsWlCapability::Maximize as u32
     | IhsWlCapability::Minimize as u32
     | IhsWlCapability::Fullscreen as u32;
 
+/// Window states the app grants a view's toplevel, as bits of
+/// `ihs_wl_view_state`: the client is told it is maximized or fullscreen
+/// (and draws itself so, a fullscreen GTK window without its header bar).
+/// Neither by default: the toplevel is a tile the size of its view.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IhsWlWindowState {
+    Maximized = 1,
+    Fullscreen = 2,
+}
+
+/// Every `IhsWlWindowState` bit.
+pub(crate) const WINDOW_STATE_ALL: u32 =
+    IhsWlWindowState::Maximized as u32 | IhsWlWindowState::Fullscreen as u32;
+
 /// `IhsWlPointerEvent::kind`.
 #[repr(u32)]
 pub enum IhsWlPointerKind {
@@ -427,6 +442,20 @@ pub extern "C" fn ihs_wl_view_capabilities(view_id: i32, capabilities: u32) -> c
             view_id,
             capabilities,
         })?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
+}
+
+/// The window states the app grants the toplevel the view `view_id` shows,
+/// as `IhsWlWindowState` bits, typically in answer to its client's requests.
+/// Its size stays the view's either way. Any thread; only enqueues.
+#[no_mangle]
+pub extern "C" fn ihs_wl_view_state(view_id: i32, state: u32) -> c_int {
+    guard("ihs_wl_view_state", || {
+        if state & !WINDOW_STATE_ALL != 0 {
+            return Err(Error::invalid(format!("bad window state {state:#x}")));
+        }
+        thread::send(thread::Cmd::ViewState { view_id, state })?;
         Ok(IhsWlResult::Ok as c_int)
     })
 }

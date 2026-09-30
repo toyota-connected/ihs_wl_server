@@ -31,6 +31,18 @@ enum WaylandWindowCapability {
   final int _bit;
 }
 
+/// A window state the app grants a client: it is told it is maximized or
+/// fullscreen, and draws itself so (a fullscreen GTK window hides its header
+/// bar). Its size stays the view's; the app sizes the view.
+enum WaylandWindowState {
+  maximized(1),
+  fullscreen(2);
+
+  const WaylandWindowState(this._bit);
+
+  final int _bit;
+}
+
 /// Controls the client toplevel a `WaylandToplevelView` shows, and reports
 /// what happens to it.
 ///
@@ -46,6 +58,29 @@ class WaylandToplevelController extends ChangeNotifier {
   }) : _capabilities = Set<WaylandWindowCapability>.unmodifiable(
          windowCapabilities,
        );
+
+  Set<WaylandWindowState> _state = const <WaylandWindowState>{};
+
+  /// The window states the app grants the client, usually in answer to its
+  /// [onWindowRequest]s: grant [WaylandWindowState.fullscreen] on a
+  /// fullscreen request, clear it on unfullscreen. Neither by default. A
+  /// request not answered leaves the client as it was, which some clients
+  /// (a GTK F11 toggle) take as a refusal.
+  Set<WaylandWindowState> get windowState => _state;
+  set windowState(Set<WaylandWindowState> value) {
+    if (setEquals(value, _state)) {
+      return;
+    }
+    _state = Set<WaylandWindowState>.unmodifiable(value);
+    final int? id = _viewId;
+    if (id != null) {
+      waylandInput?.setWindowState(id, _stateBits);
+    }
+  }
+
+  /// [windowState] as `IhsWlWindowState` bits.
+  int get _stateBits =>
+      _state.fold(0, (int bits, WaylandWindowState s) => bits | s._bit);
 
   /// Called when the client asks to change its window state, for the
   /// [windowCapabilities] the app handles.

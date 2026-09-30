@@ -15,9 +15,11 @@ use std::time::{Duration, Instant};
 use common::harness::Harness;
 use common::{mock_host, serial};
 use ihs_wl_server::{
-    ihs_wl_set_event_port, ihs_wl_view_capabilities, ihs_wl_view_close, IhsWlViewEvent as E,
+    ihs_wl_set_event_port, ihs_wl_view_capabilities, ihs_wl_view_close, ihs_wl_view_state,
+    IhsWlViewEvent as E,
 };
 use wayland_protocols::xdg::shell::client::xdg_toplevel;
+use xdg_toplevel::State as S;
 
 const APP: &str = "org.example.events";
 const PORT: i64 = 4711;
@@ -90,6 +92,27 @@ fn a_view_reports_binding_window_requests_and_closing() {
     h.client.dispatch_until("maximize advertised", |c| {
         c.wm_capabilities() == Some(vec![MAXIMIZE])
     });
+    // A tile, neither maximized nor fullscreen until the app says so.
+    h.client.dispatch_until("tiled", |c| {
+        [S::TiledLeft, S::TiledRight, S::TiledTop, S::TiledBottom]
+            .iter()
+            .all(|s| c.has_state(*s))
+            && !c.has_state(S::Maximized)
+            && !c.has_state(S::Fullscreen)
+    });
+    assert_eq!(ihs_wl_view_state(1, 2), 0);
+    h.client.dispatch_until("fullscreen granted", |c| {
+        c.has_state(S::Fullscreen) && !c.has_state(S::Maximized)
+    });
+    assert_eq!(ihs_wl_view_state(1, 1), 0);
+    h.client.dispatch_until("maximized granted", |c| {
+        c.has_state(S::Maximized) && !c.has_state(S::Fullscreen)
+    });
+    assert_eq!(ihs_wl_view_state(1, 0), 0);
+    h.client
+        .dispatch_until("neither", |c| !c.has_state(S::Maximized));
+    assert!(ihs_wl_view_state(1, 4) < 0, "unknown state bit accepted");
+
     // A request for what it does not handle is ignored.
     h.client.toplevel().set_minimized();
     h.client.roundtrip();
@@ -105,8 +128,8 @@ fn a_view_reports_binding_window_requests_and_closing() {
     });
     assert!(ihs_wl_view_capabilities(1, 8) < 0, "unknown bit accepted");
 
-    // Window-state requests reach the app; the toplevel stays maximized to
-    // the view.
+    // Window-state requests reach the app; the toplevel keeps the view's
+    // size.
     let mut ask = |event: E, send: fn(&xdg_toplevel::XdgToplevel)| {
         send(h.client.toplevel());
         h.client.roundtrip();

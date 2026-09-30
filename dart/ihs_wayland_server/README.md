@@ -71,13 +71,18 @@ A `WaylandToplevelController` reports what happens to the toplevel a view
 shows and closes it:
 
 ```dart
-final controller = WaylandToplevelController(
+late final WaylandToplevelController controller = WaylandToplevelController(
   // The client shows buttons for these and no others; none by default.
   windowCapabilities: {WaylandWindowCapability.maximize},
   onWindowRequest: (request) {
     // maximize, unmaximize (and minimize, fullscreen, unfullscreen when
-    // handled): the client's own buttons. The toplevel stays the view's
-    // size; resize or hide the view as the app sees fit.
+    // handled): the client's own buttons and keys. Grant the state so the
+    // client draws itself so, and size the view as the app sees fit.
+    if (request == WaylandWindowRequest.maximize) {
+      controller.windowState = {WaylandWindowState.maximized};
+    } else if (request == WaylandWindowRequest.unmaximize) {
+      controller.windowState = {};
+    }
   },
 );
 controller.addListener(() {

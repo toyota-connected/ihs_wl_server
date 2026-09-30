@@ -25,9 +25,14 @@ Early development. Working today:
   `wl_seat`, `wp_cursor_shape_manager_v1`, `xdg_activation_v1`,
   `wl_data_device_manager`, `wl_output` and `zxdg_output_manager_v1`.
 - A view binds to a toplevel by activation token or app_id and configures
-  it to the view's size, or to a size the view requests, scaled to fit. `xdg_activation_v1` carries the token: a client
-  started with one the module issued (`ihs_wl_activation_token`) in
-  `XDG_ACTIVATION_TOKEN` activates its toplevel with it, as GTK and Qt do.
+  it to the view's size, or to a size the view requests, scaled to fit; a
+  window the client makes larger than asked (a minimum size wider than the
+  view) is scaled down to fit rather than cut off. The toplevel is tiled on
+  every edge (no borders or shadows) and maximized or fullscreen only when
+  the app grants it (`ihs_wl_view_state`). `xdg_activation_v1` carries the
+  token: a client started with one the module issued
+  (`ihs_wl_activation_token`) in `XDG_ACTIVATION_TOKEN` activates its
+  toplevel with it, as GTK and Qt do.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
   buffer transforms and opaque regions) reaches the shell as one layer per
   surface, bottom to top. Each layer keeps a stable id, so it keeps its
@@ -240,13 +245,18 @@ A `WaylandToplevelController` reports what happens to the toplevel a view
 shows and closes it:
 
 ```dart
-final controller = WaylandToplevelController(
+late final WaylandToplevelController controller = WaylandToplevelController(
   // The client shows buttons for these and no others; none by default.
   windowCapabilities: {WaylandWindowCapability.maximize},
   onWindowRequest: (request) {
     // maximize, unmaximize (and minimize, fullscreen, unfullscreen when
-    // handled): the client's own buttons. The toplevel stays the view's
-    // size; resize or hide the view as the app sees fit.
+    // handled): the client's own buttons and keys. Grant the state so the
+    // client draws itself so, and size the view as the app sees fit.
+    if (request == WaylandWindowRequest.maximize) {
+      controller.windowState = {WaylandWindowState.maximized};
+    } else if (request == WaylandWindowRequest.unmaximize) {
+      controller.windowState = {};
+    }
   },
 );
 controller.addListener(() {

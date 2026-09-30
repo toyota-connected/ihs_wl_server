@@ -138,6 +138,17 @@ class IhsWlBindings {
   late final _ihs_wl_view_capabilities = _ihs_wl_view_capabilitiesPtr
       .asFunction<int Function(int, int)>();
 
+  int ihs_wl_view_state(int view_id, int state) {
+    return _ihs_wl_view_state(view_id, state);
+  }
+
+  late final _ihs_wl_view_statePtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function(ffi.Int32, ffi.Uint32)>>(
+        'ihs_wl_view_state',
+      );
+  late final _ihs_wl_view_state = _ihs_wl_view_statePtr
+      .asFunction<int Function(int, int)>();
+
   int ihs_wl_set_event_port(
     ffi.Pointer<
       ffi.NativeFunction<
@@ -301,6 +312,20 @@ enum IhsWlCapability {
     2 => IHS_WL_CAPABILITY_MINIMIZE,
     4 => IHS_WL_CAPABILITY_FULLSCREEN,
     _ => throw ArgumentError('Unknown value for IhsWlCapability: $value'),
+  };
+}
+
+enum IhsWlWindowState {
+  IHS_WL_WINDOW_STATE_MAXIMIZED(1),
+  IHS_WL_WINDOW_STATE_FULLSCREEN(2);
+
+  final int value;
+  const IhsWlWindowState(this.value);
+
+  static IhsWlWindowState fromValue(int value) => switch (value) {
+    1 => IHS_WL_WINDOW_STATE_MAXIMIZED,
+    2 => IHS_WL_WINDOW_STATE_FULLSCREEN,
+    _ => throw ArgumentError('Unknown value for IhsWlWindowState: $value'),
   };
 }
 

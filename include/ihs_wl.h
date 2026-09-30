@@ -185,6 +185,28 @@ typedef uint32_t IhsWlCapability;
 #endif // __cplusplus
 
 /*
+ Window states the app grants a view's toplevel, as bits of
+ `ihs_wl_view_state`: the client is told it is maximized or fullscreen
+ (and draws itself so, a fullscreen GTK window without its header bar).
+ Neither by default: the toplevel is a tile the size of its view.
+ */
+enum IhsWlWindowState
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  IHS_WL_WINDOW_STATE_MAXIMIZED = 1,
+  IHS_WL_WINDOW_STATE_FULLSCREEN = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum IhsWlWindowState IhsWlWindowState;
+#else
+typedef uint32_t IhsWlWindowState;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/*
  Start-up configuration.
  */
 typedef struct IhsWlConfig {
@@ -341,6 +363,13 @@ int ihs_wl_view_close(int32_t view_id);
  only enqueues.
  */
 int ihs_wl_view_capabilities(int32_t view_id, uint32_t capabilities);
+
+/*
+ The window states the app grants the toplevel the view `view_id` shows,
+ as `IhsWlWindowState` bits, typically in answer to its client's requests.
+ Its size stays the view's either way. Any thread; only enqueues.
+ */
+int ihs_wl_view_state(int32_t view_id, uint32_t state);
 
 /*
  Post view events (`IhsWlViewEvent`) from now on to the Dart native port

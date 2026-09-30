@@ -44,9 +44,9 @@ impl State {
         }
     }
 
-    /// Pass a request on and answer it: the toplevel stays a tile the size
-    /// of its view, so the configure repeats what it has (xdg-shell asks for
-    /// one either way).
+    /// Pass a request on and answer it: xdg-shell asks for a configure
+    /// either way, and until the app grants the state (ihs_wl_view_state)
+    /// it repeats what the toplevel has.
     fn window_request(&mut self, surface: &ToplevelSurface, event: IhsWlViewEvent) {
         self.post_request(surface, event);
         if surface.is_initial_configure_sent() {

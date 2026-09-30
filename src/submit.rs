@@ -349,10 +349,8 @@ impl State {
         }
         // Built after every frame and image is in place: the layers point
         // into `prepared`, which must not move again.
-        let (fit, dpr) = self
-            .views
-            .get(&view_id)
-            .map_or((Fit::IDENTITY, 1.0), |v| (v.fit(), v.dpr));
+        let fit = self.view_fit(view_id);
+        let dpr = self.views.get(&view_id).map_or(1.0, |v| v.dpr);
         let layers: Vec<sys::IhsLayer> = specs
             .iter()
             .zip(prepared.iter())

@@ -135,14 +135,21 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   void _created(int id) {
     _viewId = id;
     widget.controller?._attach(id, _bound);
-    // As the creation params carried it; the controller may have changed.
-    waylandInput?.setCapabilities(id, widget.controller?._capabilityBits ?? 0);
+    // As the creation params carried them; the controller may have changed.
+    _sendController(id);
     // The creation params carry the size the view was built with; this one
     // may have changed since.
     waylandInput?.requestSize(id, widget.requestedSize);
     if (_focus.hasFocus) {
       waylandInput?.focus(id, true);
     }
+  }
+
+  /// What the controller sets for the view, or the defaults without one.
+  void _sendController(int id) {
+    final WaylandToplevelController? controller = widget.controller;
+    waylandInput?.setCapabilities(id, controller?._capabilityBits ?? 0);
+    waylandInput?.setWindowState(id, controller?._stateBits ?? 0);
   }
 
   @override
@@ -153,10 +160,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
       widget.controller?._attach(_viewId, _bound);
       final int? id = _viewId;
       if (id != null) {
-        waylandInput?.setCapabilities(
-          id,
-          widget.controller?._capabilityBits ?? 0,
-        );
+        _sendController(id);
       }
     }
     final int? id = _viewId;
@@ -232,15 +236,22 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                         BuildContext context,
                         PlatformViewController controller,
                       ) {
-                        return PlatformViewSurface(
-                          controller: controller,
-                          gestureRecognizers:
-                              const <Factory<OneSequenceGestureRecognizer>>{
-                                Factory<OneSequenceGestureRecognizer>(
-                                  EagerGestureRecognizer.new,
-                                ),
-                              },
-                          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+                        // The shell learns a new size only from a resize
+                        // call; PlatformViewLink creates at the first size
+                        // and never reports another.
+                        return _LayoutListener(
+                          onLayout:
+                              (controller as _ToplevelViewController).laidOut,
+                          child: PlatformViewSurface(
+                            controller: controller,
+                            gestureRecognizers:
+                                const <Factory<OneSequenceGestureRecognizer>>{
+                                  Factory<OneSequenceGestureRecognizer>(
+                                    EagerGestureRecognizer.new,
+                                  ),
+                                },
+                            hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+                          ),
                         );
                       },
                   onCreatePlatformView: (PlatformViewCreationParams params) {
@@ -256,6 +267,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                         'app_id': widget.appId,
                         'dpr': dpr,
                         'capabilities': widget.controller?._capabilityBits ?? 0,
+                        'window_state': widget.controller?._stateBits ?? 0,
                         'requested_width': widget.requestedSize?.width,
                         'requested_height': widget.requestedSize?.height,
                       },
@@ -327,7 +339,30 @@ class _ToplevelViewController extends PlatformViewController {
   Future<void> create({Size? size, Offset? position}) =>
       _creation ??= _createOnce(size);
 
+  /// The size the shell was last given, at create or resize.
+  Size? _sentSize;
+
+  /// The size the view was last laid out at.
+  Size? _laidOut;
+
+  /// The view was laid out at @p size: tell the shell if it has another.
+  void laidOut(Size size) {
+    _laidOut = size;
+    if (_created && size != _sentSize) {
+      _resize(size);
+    }
+  }
+
+  void _resize(Size size) {
+    _sentSize = size;
+    SystemChannels.platform_views.invokeMethod<void>(
+      'resize',
+      <String, Object?>{'id': id, 'width': size.width, 'height': size.height},
+    );
+  }
+
   Future<void> _createOnce(Size? size) async {
+    _sentSize = size;
     final ByteData? params = const StandardMessageCodec().encodeMessage(
       creationParams,
     );
@@ -346,6 +381,11 @@ class _ToplevelViewController extends PlatformViewController {
         });
     _created = true;
     onCreated(id);
+    // Laid out again while the create was in flight.
+    final Size? laidOut = _laidOut;
+    if (laidOut != null && laidOut != _sentSize) {
+      _resize(laidOut);
+    }
   }
 
   // Straight to the module over FFI: no platform channel, no platform
@@ -369,5 +409,40 @@ class _ToplevelViewController extends PlatformViewController {
       'dispose',
       <String, Object>{'id': id},
     );
+  }
+}
+
+/// Reports its size after every layout that changes it.
+class _LayoutListener extends SingleChildRenderObjectWidget {
+  const _LayoutListener({required this.onLayout, required super.child});
+
+  final ValueChanged<Size> onLayout;
+
+  @override
+  _RenderLayoutListener createRenderObject(BuildContext context) =>
+      _RenderLayoutListener(onLayout);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderLayoutListener renderObject,
+  ) {
+    renderObject.onLayout = onLayout;
+  }
+}
+
+class _RenderLayoutListener extends RenderProxyBox {
+  _RenderLayoutListener(this.onLayout);
+
+  ValueChanged<Size> onLayout;
+  Size? _last;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    if (size != _last) {
+      _last = size;
+      onLayout(size);
+    }
   }
 }

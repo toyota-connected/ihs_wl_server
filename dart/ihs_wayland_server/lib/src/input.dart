@@ -248,4 +248,9 @@ class WaylandInput {
   /// `IhsWlCapability` bits.
   void setCapabilities(int viewId, int bits) =>
       _lib.ihs_wl_view_capabilities(viewId, bits);
+
+  /// The window states the app grants the view's toplevel, as
+  /// `IhsWlWindowState` bits.
+  void setWindowState(int viewId, int bits) =>
+      _lib.ihs_wl_view_state(viewId, bits);
 }
