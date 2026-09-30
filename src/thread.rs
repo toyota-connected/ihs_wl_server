@@ -38,6 +38,12 @@ pub enum Cmd {
     },
     /// Ask the client of the view's toplevel to close it.
     ViewClose(i32),
+    /// The window states the app grants the view's toplevel
+    /// (`IhsWlWindowState` bits).
+    ViewState {
+        view_id: i32,
+        state: u32,
+    },
     /// The window-state changes the app handles for the view
     /// (`IhsWlCapability` bits).
     ViewCapabilities {

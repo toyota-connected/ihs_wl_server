@@ -91,15 +91,12 @@ impl State {
     /// @p x, @p y in view @p view_id's logical space, in its client's: the
     /// same unless the view asked the client for a size of its own.
     fn client_point(&self, view_id: i32, x: f64, y: f64) -> Point<f64, Logical> {
-        self.views
-            .get(&view_id)
-            .map_or((x, y), |v| v.fit().to_client((x, y)))
-            .into()
+        self.view_fit(view_id).to_client((x, y)).into()
     }
 
     /// Scroll distances scale with the content.
     fn client_scale(&self, view_id: i32) -> f64 {
-        self.views.get(&view_id).map_or(1.0, |v| v.fit().scale)
+        self.view_fit(view_id).scale
     }
 
     fn pointer_in_view(&self, view_id: i32) -> bool {

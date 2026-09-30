@@ -542,6 +542,11 @@ impl Client {
         self.roundtrip();
     }
 
+    /// The toplevel's last configure had @p state.
+    pub fn has_state(&self, state: xdg_toplevel::State) -> bool {
+        self.app.configure_states.contains(&(state as u32))
+    }
+
     /// The toplevel's last configure said it is not visible.
     pub fn suspended(&self) -> bool {
         self.app

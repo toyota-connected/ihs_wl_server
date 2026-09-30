@@ -164,3 +164,57 @@ fn input_is_mapped_into_the_client() {
     );
     mock_host::dispose_view(1);
 }
+
+/// A client that commits a window larger than it was asked for (a minimum
+/// size wider than the view) is scaled down to fit, not cut off.
+#[test]
+fn a_window_larger_than_asked_is_scaled_to_fit() {
+    let _serial = serial();
+    let mut h = Harness::new("ihs-wl-test-oversized");
+    h.client.use_seat();
+    h.client.create_toplevel(APP, "oversized");
+    h.bind(1, APP, 400.0, 400.0);
+    h.client.dispatch_until("configured to the view", |c| {
+        c.configure_size() == Some((400, 400))
+    });
+    // Asked for 400x400, it draws 500x400 anyway.
+    let buf = h.client.new_dmabuf(500, 400);
+    h.client.set_window_geometry(0, 0, 500, 400);
+    h.client.commit_buffer(buf, false);
+
+    // 500x400 into 400x400: 0.8, centered vertically.
+    wait_layers("scaled down", |l| {
+        l.first().is_some_and(|l| l.dst == (0, 40, 400, 320))
+    });
+
+    // Its right edge is still reachable: view (390, 200) is client
+    // (487.5, 200).
+    let sid = h.client.surface_id(false);
+    let ev = IhsWlPointerEvent {
+        struct_size: std::mem::size_of::<IhsWlPointerEvent>(),
+        kind: IhsWlPointerKind::Motion as u32,
+        button: 0,
+        x: 390.0,
+        y: 200.0,
+        pressed: 0,
+        axis_source: 0,
+        axis_x: 0.0,
+        axis_y: 0.0,
+        value120_x: 0,
+        value120_y: 0,
+        time_us: 1_000,
+    };
+    assert!(unsafe { ihs_wl_pointer(1, &ev) } >= 0);
+    h.client.wait_input(
+        "enter at the mapped point",
+        &[
+            Input::Enter {
+                surface: sid,
+                x: 487.5,
+                y: 200.0,
+            },
+            Input::Frame,
+        ],
+    );
+    mock_host::dispose_view(1);
+}

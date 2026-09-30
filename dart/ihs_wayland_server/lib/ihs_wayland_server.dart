@@ -11,4 +11,5 @@ export 'src/view.dart'
         WaylandToplevelController,
         WaylandToplevelView,
         WaylandWindowCapability,
-        WaylandWindowRequest;
+        WaylandWindowRequest,
+        WaylandWindowState;

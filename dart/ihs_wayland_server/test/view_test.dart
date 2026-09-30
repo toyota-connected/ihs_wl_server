@@ -98,6 +98,9 @@ void main() {
       },
     );
     addTearDown(controller.dispose);
+    controller.windowState = const <WaylandWindowState>{
+      WaylandWindowState.fullscreen,
+    };
     int notified = 0;
     controller.addListener(() => notified++);
     await tester.pumpWidget(
@@ -110,8 +113,9 @@ void main() {
     await tester.pump();
     final int id = viewId!;
     expect(controller.isBound, isFalse);
-    // Maximize (1) and fullscreen (4).
+    // Maximize (1) and fullscreen (4); granted fullscreen (2).
     expect(params?['capabilities'], 5);
+    expect(params?['window_state'], 2);
 
     ViewEvents.dispatch(<int>[1, id]); // bound
     expect(controller.isBound, isTrue);
@@ -133,5 +137,48 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     ViewEvents.dispatch(<int>[1, id]);
     expect(controller.isBound, isFalse);
+  });
+
+  testWidgets('a layout change resizes the platform view', (
+    WidgetTester tester,
+  ) async {
+    final List<MethodCall> calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform_views,
+      (MethodCall call) async {
+        calls.add(call);
+        return null;
+      },
+    );
+    Widget sized(double width, double height) => WidgetsApp(
+      color: const Color(0xff000000),
+      builder: (BuildContext context, Widget? child) => Center(
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: const WaylandToplevelView(),
+        ),
+      ),
+    );
+    await tester.pumpWidget(sized(200, 100));
+    await tester.pump();
+    final Map<Object?, Object?> create =
+        calls.single.arguments as Map<Object?, Object?>;
+    expect(calls.single.method, 'create');
+    expect((create['width'], create['height']), (200.0, 100.0));
+
+    await tester.pumpWidget(sized(300, 150));
+    await tester.pump();
+    expect(calls.map((MethodCall c) => c.method), <String>['create', 'resize']);
+    expect(calls.last.arguments, <String, Object?>{
+      'id': create['id'],
+      'width': 300.0,
+      'height': 150.0,
+    });
+
+    // The same size again sends nothing.
+    await tester.pumpWidget(sized(300, 150));
+    await tester.pump();
+    expect(calls, hasLength(2));
   });
 }

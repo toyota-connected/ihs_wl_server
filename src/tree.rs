@@ -124,6 +124,18 @@ pub(crate) fn geometry_origin(root: &WlSurface) -> Point<i32, Logical> {
     })
 }
 
+/// The size of @p root's window geometry, once the client set one.
+pub(crate) fn geometry_size(root: &WlSurface) -> Option<(i32, i32)> {
+    compositor::with_states(root, |states| {
+        states
+            .cached_state
+            .get::<SurfaceCachedState>()
+            .current()
+            .geometry
+            .map(|g| (g.size.w, g.size.h))
+    })
+}
+
 /// The layers, how many surfaces had a buffer that could not be shown (a
 /// shared-memory format other than ARGB/XRGB8888, or nothing to stage it
 /// with), and the staging slots dropped, whose buffer ids are to retire.
