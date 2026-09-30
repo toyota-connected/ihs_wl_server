@@ -241,10 +241,12 @@ shows and closes it:
 
 ```dart
 final controller = WaylandToplevelController(
+  // The client shows buttons for these and no others; none by default.
+  windowCapabilities: {WaylandWindowCapability.maximize},
   onWindowRequest: (request) {
-    // maximize, unmaximize, minimize, fullscreen, unfullscreen: the
-    // client's own buttons. The toplevel stays the view's size; resize or
-    // hide the view as the app sees fit.
+    // maximize, unmaximize (and minimize, fullscreen, unfullscreen when
+    // handled): the client's own buttons. The toplevel stays the view's
+    // size; resize or hide the view as the app sees fit.
   },
 );
 controller.addListener(() {
@@ -259,7 +261,8 @@ controller.close(); // xdg_toplevel.close; the client may ask its user first
 ```
 
 Events reach Dart over a native port (`ihs_wl_set_event_port`), which a hot
-restart re-registers; `ihs_wl_view_close` asks the client to close.
+restart re-registers; `ihs_wl_view_close` asks the client to close, and
+`ihs_wl_view_capabilities` sets the `wm_capabilities` its client is sent.
 
 `WaylandServer.start` is idempotent. After a hot restart the server is still
 running. Its clients carry on, and the re-created views bind to their

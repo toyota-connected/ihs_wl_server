@@ -156,6 +156,35 @@ typedef uint32_t IhsWlViewEvent;
 #endif // __cplusplus
 
 /*
+ Window-state changes the app handles for a view, as bits of
+ `ihs_wl_view_capabilities`. Its client shows the buttons for these (and
+ only these: xdg-shell `wm_capabilities`), and its requests for others are
+ ignored.
+ */
+enum IhsWlCapability
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  /*
+   Maximize and restore.
+   */
+  IHS_WL_CAPABILITY_MAXIMIZE = 1,
+  IHS_WL_CAPABILITY_MINIMIZE = 2,
+  /*
+   Fullscreen and back.
+   */
+  IHS_WL_CAPABILITY_FULLSCREEN = 4,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum IhsWlCapability IhsWlCapability;
+#else
+typedef uint32_t IhsWlCapability;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/*
  Start-up configuration.
  */
 typedef struct IhsWlConfig {
@@ -304,6 +333,14 @@ int ihs_wl_focus(int32_t view_id, uint32_t focused);
  only enqueues. A view showing nothing is left alone.
  */
 int ihs_wl_view_close(int32_t view_id);
+
+/*
+ The window-state changes the app handles for the view `view_id`, as
+ `IhsWlCapability` bits: its client shows buttons for these and no others,
+ and its requests for others are not posted. None by default. Any thread;
+ only enqueues.
+ */
+int ihs_wl_view_capabilities(int32_t view_id, uint32_t capabilities);
 
 /*
  Post view events (`IhsWlViewEvent`) from now on to the Dart native port

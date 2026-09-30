@@ -147,6 +147,8 @@ pub struct ViewEntry {
     /// The size the client is asked for instead of the view's, in logical
     /// pixels; its content is then scaled to fit the view.
     pub requested: Option<(i32, i32)>,
+    /// The window-state changes the app handles (`IhsWlCapability` bits).
+    pub capabilities: u32,
 }
 
 /// Where the client's logical space sits in its view: scaled by `scale`
@@ -331,6 +333,7 @@ impl State {
                 let size = view.size;
                 let dpr = view.params.dpr.unwrap_or(1.0);
                 let requested = view.params.requested;
+                let capabilities = view.params.capabilities;
                 // One output stands for the display every view is on.
                 self.output
                     .change_current_state(None, None, Some(Scale::Fractional(dpr)), None);
@@ -354,6 +357,7 @@ impl State {
                         suspended: false,
                         hidden_release_ns: 0,
                         requested,
+                        capabilities,
                     },
                 );
                 self.try_bind_view(id);
@@ -387,6 +391,15 @@ impl State {
                 let toplevel = self.views.get(&view_id).and_then(|v| v.toplevel);
                 if let Some(t) = toplevel.and_then(|id| self.toplevels.by_id.get(&id)) {
                     t.surface.send_close();
+                }
+            }
+            Cmd::ViewCapabilities {
+                view_id,
+                capabilities,
+            } => {
+                if let Some(entry) = self.views.get_mut(&view_id) {
+                    entry.capabilities = capabilities;
+                    self.configure_view(view_id);
                 }
             }
             Cmd::ViewRequestSize { view_id, size } => {
@@ -566,18 +579,22 @@ impl State {
         };
         let activated = self.view_activated(view_id);
         let suspended = entry.suspended;
+        let capabilities = wm_capabilities(entry.capabilities);
         let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };
         let changed = t.surface.with_pending_state(|s| {
             let size = Some((w.max(1), h.max(1)).into());
-            let before = (s.size, s.states.clone());
+            let before = (s.size, s.states.clone(), s.capabilities.clone());
             s.size = size;
+            // Buttons for what the app handles; smithay sends
+            // wm_capabilities when this changes.
+            s.capabilities.replace(capabilities);
             // A tile the size of its view: no borders to draw, no resizing.
             s.states.set(xdg_toplevel::State::Maximized);
             set_state(&mut s.states, xdg_toplevel::State::Activated, activated);
             set_state(&mut s.states, xdg_toplevel::State::Suspended, suspended);
-            before != (s.size, s.states.clone())
+            before != (s.size, s.states.clone(), s.capabilities.clone())
         });
         if changed && t.surface.is_initial_configure_sent() {
             t.surface.send_configure();
@@ -668,6 +685,21 @@ impl Toplevels {
             states.data_map.get::<ToplevelId>().map(|t| t.0)
         })
     }
+}
+
+/// The wm_capabilities for `IhsWlCapability` bits @p mask.
+fn wm_capabilities(mask: u32) -> Vec<xdg_toplevel::WmCapabilities> {
+    use crate::IhsWlCapability as C;
+    use xdg_toplevel::WmCapabilities as W;
+    [
+        (C::Maximize, W::Maximize),
+        (C::Minimize, W::Minimize),
+        (C::Fullscreen, W::Fullscreen),
+    ]
+    .into_iter()
+    .filter(|(c, _)| mask & *c as u32 != 0)
+    .map(|(_, w)| w)
+    .collect()
 }
 
 /// Set or clear @p state in @p states.

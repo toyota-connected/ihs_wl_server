@@ -107,6 +107,25 @@ pub enum IhsWlViewEvent {
     UnfullscreenRequested = 7,
 }
 
+/// Window-state changes the app handles for a view, as bits of
+/// `ihs_wl_view_capabilities`. Its client shows the buttons for these (and
+/// only these: xdg-shell `wm_capabilities`), and its requests for others are
+/// ignored.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IhsWlCapability {
+    /// Maximize and restore.
+    Maximize = 1,
+    Minimize = 2,
+    /// Fullscreen and back.
+    Fullscreen = 4,
+}
+
+/// Every `IhsWlCapability` bit.
+pub(crate) const CAPABILITY_ALL: u32 = IhsWlCapability::Maximize as u32
+    | IhsWlCapability::Minimize as u32
+    | IhsWlCapability::Fullscreen as u32;
+
 /// `IhsWlPointerEvent::kind`.
 #[repr(u32)]
 pub enum IhsWlPointerKind {
@@ -388,6 +407,26 @@ pub extern "C" fn ihs_wl_focus(view_id: i32, focused: u32) -> c_int {
 pub extern "C" fn ihs_wl_view_close(view_id: i32) -> c_int {
     guard("ihs_wl_view_close", || {
         thread::send(thread::Cmd::ViewClose(view_id))?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
+}
+
+/// The window-state changes the app handles for the view `view_id`, as
+/// `IhsWlCapability` bits: its client shows buttons for these and no others,
+/// and its requests for others are not posted. None by default. Any thread;
+/// only enqueues.
+#[no_mangle]
+pub extern "C" fn ihs_wl_view_capabilities(view_id: i32, capabilities: u32) -> c_int {
+    guard("ihs_wl_view_capabilities", || {
+        if capabilities & !CAPABILITY_ALL != 0 {
+            return Err(Error::invalid(format!(
+                "bad capabilities {capabilities:#x}"
+            )));
+        }
+        thread::send(thread::Cmd::ViewCapabilities {
+            view_id,
+            capabilities,
+        })?;
         Ok(IhsWlResult::Ok as c_int)
     })
 }

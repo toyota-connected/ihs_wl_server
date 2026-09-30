@@ -68,6 +68,8 @@ struct App {
     configure_states: Vec<u32>,
     /// xdg_toplevel.close events.
     close_requests: u32,
+    /// The last xdg_toplevel.wm_capabilities, once sent.
+    wm_capabilities: Option<Vec<u32>>,
     /// wl_buffer.release events, by the client's buffer index.
     released: HashMap<usize, u32>,
     frames_done: u32,
@@ -518,6 +520,11 @@ impl Client {
         self._toplevel.as_ref().expect("no toplevel")
     }
 
+    /// The last wm_capabilities, sorted, once sent.
+    pub fn wm_capabilities(&self) -> Option<Vec<u32>> {
+        self.app.wm_capabilities.clone()
+    }
+
     /// xdg_toplevel.close events so far.
     pub fn close_requests(&self) -> u32 {
         self.app.close_requests
@@ -764,6 +771,13 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
                 .collect();
         } else if let xdg_toplevel::Event::Close = event {
             app.close_requests += 1;
+        } else if let xdg_toplevel::Event::WmCapabilities { capabilities } = event {
+            let mut caps: Vec<u32> = capabilities
+                .chunks_exact(4)
+                .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            caps.sort_unstable();
+            app.wm_capabilities = Some(caps);
         }
     }
 }
