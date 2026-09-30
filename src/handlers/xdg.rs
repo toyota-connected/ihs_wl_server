@@ -69,6 +69,10 @@ impl XdgShellHandler for State {
         let Some(id) = Toplevels::id_of(surface.wl_surface()) else {
             return;
         };
+        // A dialog's view, looked up while its parent is still known.
+        let dialog_view = surface
+            .parent()
+            .and_then(|_| self.bound_view_of(surface.wl_surface()));
         self.unbind_toplevel(id);
         if let Some(entry) = self.toplevels.by_id.remove(&id) {
             if entry.mapped {
@@ -77,6 +81,30 @@ impl XdgShellHandler for State {
                 observe::emit(Observed::ToplevelUnmapped { app_id });
             }
         }
+        if let Some(view_id) = dialog_view {
+            // Its layers go, and the keyboard goes back to what is below.
+            self.submit_view(view_id);
+            self.refresh_keyboard_focus();
+        }
+    }
+
+    fn parent_changed(&mut self, surface: ToplevelSurface) {
+        // Now a dialog of another view, or none: show it where it belongs.
+        let views: Vec<i32> = self.views.keys().copied().collect();
+        for view_id in views {
+            if self
+                .views
+                .get(&view_id)
+                .is_some_and(|v| v.toplevel.is_some())
+            {
+                self.submit_view(view_id);
+            }
+        }
+        tracing::debug!(
+            parent = surface.parent().is_some(),
+            "toplevel parent changed"
+        );
+        self.refresh_keyboard_focus();
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {

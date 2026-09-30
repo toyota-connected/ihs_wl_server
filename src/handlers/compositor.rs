@@ -178,6 +178,8 @@ impl State {
             tracing::info!(id, app_id, title, "toplevel mapped");
             observe::emit(Observed::ToplevelMapped { app_id, title });
             self.bind_waiting_views();
+            // A dialog over a view takes the keyboard from its parent.
+            self.refresh_keyboard_focus();
         }
     }
 

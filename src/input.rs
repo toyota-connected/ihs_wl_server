@@ -304,13 +304,11 @@ impl State {
         let Some(keyboard) = self.devices.keyboard.clone() else {
             return;
         };
+        // The view's topmost window: a dialog over its toplevel has it.
         let target = self
             .focused_view
-            .and_then(|id| self.views.get(&id))
-            .filter(|v| !v.suspended)
-            .and_then(|v| v.toplevel)
-            .and_then(|t| self.toplevels.by_id.get(&t))
-            .map(|t| t.surface.wl_surface().clone());
+            .filter(|id| self.views.get(id).is_some_and(|v| !v.suspended))
+            .and_then(|id| self.focus_window(id));
         if keyboard.current_focus() != target {
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         }

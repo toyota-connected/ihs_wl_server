@@ -19,6 +19,7 @@ mod buffers;
 mod caps;
 mod config;
 mod cursor;
+mod dialogs;
 mod egl_display;
 mod error;
 mod events;

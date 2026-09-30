@@ -468,7 +468,8 @@ impl State {
         let token = params.token.clone();
         let want = params.app_id.clone();
         let found = self.toplevels.by_id.iter().find_map(|(id, t)| {
-            if !t.mapped || t.view.is_some() {
+            // A dialog is shown with its parent, never on its own.
+            if !t.mapped || t.view.is_some() || t.surface.parent().is_some() {
                 return None;
             }
             if token.is_some() || t.token.is_some() {
@@ -560,8 +561,14 @@ impl State {
     /// to draw to map, and binding waits for the map.
     pub fn sync_states(&mut self) {
         for t in self.toplevels.by_id.values() {
-            let view = t.view.and_then(|v| self.views.get(&v).map(|e| (v, e)));
-            let activated = view.is_some_and(|(v, _)| self.view_activated(v));
+            let surface = t.surface.wl_surface();
+            let view = self
+                .bound_view_of(surface)
+                .and_then(|v| self.views.get(&v).map(|e| (v, e)));
+            // Of a view's windows, the topmost is the active one.
+            let activated = view.is_some_and(|(v, _)| {
+                self.view_activated(v) && self.focus_window(v).as_ref() == Some(surface)
+            });
             let suspended = view.is_some_and(|(_, e)| e.suspended);
             let changed = t.surface.with_pending_state(|s| {
                 let before = s.states.clone();
@@ -605,7 +612,10 @@ impl State {
         let (Some(toplevel_id), Some((w, h))) = (entry.toplevel, entry.client_size()) else {
             return;
         };
-        let activated = self.view_activated(view_id);
+        let activated = self.view_activated(view_id)
+            && self
+                .focus_window(view_id)
+                .is_some_and(|w| Toplevels::id_of(&w) == Some(toplevel_id));
         let suspended = entry.suspended;
         let capabilities = wm_capabilities(entry.capabilities);
         let granted = |s: crate::IhsWlWindowState| entry.window_state & s as u32 != 0;
@@ -649,10 +659,10 @@ impl State {
         }
     }
 
-    /// The view showing the toplevel @p surface belongs to, popups
-    /// included, if it is bound.
+    /// The view showing the toplevel @p surface belongs to, popups and
+    /// dialogs included, if it is bound.
     pub fn bound_view_of(&self, surface: &WlSurface) -> Option<i32> {
-        let root = crate::popups::toplevel_of(&self.popups, surface);
+        let root = self.window_root(surface);
         let id = Toplevels::id_of(&root)?;
         self.toplevels.by_id.get(&id)?.view
     }
