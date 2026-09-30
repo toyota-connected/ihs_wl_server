@@ -12,6 +12,7 @@ use smithay::desktop::PopupManager;
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, Scale};
 use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{DisplayHandle, Weak};
@@ -501,6 +502,35 @@ impl State {
         }
     }
 
+    /// Whether the toplevel view @p view_id shows is the active window:
+    /// the view has Dart's keyboard focus and is in the scene, as where
+    /// refresh_keyboard_focus points the keyboard.
+    pub fn view_activated(&self, view_id: i32) -> bool {
+        self.focused_view == Some(view_id) && self.views.get(&view_id).is_some_and(|v| !v.suspended)
+    }
+
+    /// Give each toplevel the activated and suspended states it should have
+    /// now, after focus, binding or suspension changed. Suspended: its view
+    /// left the scene, so the client can stop rendering (xdg-shell v6; older
+    /// clients are not told). A toplevel no view shows yet is not: it has
+    /// to draw to map, and binding waits for the map.
+    pub fn sync_states(&mut self) {
+        for t in self.toplevels.by_id.values() {
+            let view = t.view.and_then(|v| self.views.get(&v).map(|e| (v, e)));
+            let activated = view.is_some_and(|(v, _)| self.view_activated(v));
+            let suspended = view.is_some_and(|(_, e)| e.suspended);
+            let changed = t.surface.with_pending_state(|s| {
+                let before = s.states.clone();
+                set_state(&mut s.states, xdg_toplevel::State::Activated, activated);
+                set_state(&mut s.states, xdg_toplevel::State::Suspended, suspended);
+                before != s.states
+            });
+            if changed && t.surface.is_initial_configure_sent() {
+                t.surface.send_configure();
+            }
+        }
+    }
+
     /// Show what view @p view_id last showed at its current fit. A commit
     /// would too, but a client keeping its size has none to make.
     fn refit_view(&mut self, view_id: i32) {
@@ -521,17 +551,19 @@ impl State {
         let (Some(toplevel_id), Some((w, h))) = (entry.toplevel, entry.client_size()) else {
             return;
         };
+        let activated = self.view_activated(view_id);
+        let suspended = entry.suspended;
         let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };
-        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
         let changed = t.surface.with_pending_state(|s| {
             let size = Some((w.max(1), h.max(1)).into());
             let before = (s.size, s.states.clone());
             s.size = size;
             // A tile the size of its view: no borders to draw, no resizing.
             s.states.set(xdg_toplevel::State::Maximized);
-            s.states.set(xdg_toplevel::State::Activated);
+            set_state(&mut s.states, xdg_toplevel::State::Activated, activated);
+            set_state(&mut s.states, xdg_toplevel::State::Suspended, suspended);
             before != (s.size, s.states.clone())
         });
         if changed && t.surface.is_initial_configure_sent() {
@@ -622,6 +654,19 @@ impl Toplevels {
         compositor::with_states(surface, |states| {
             states.data_map.get::<ToplevelId>().map(|t| t.0)
         })
+    }
+}
+
+/// Set or clear @p state in @p states.
+fn set_state(
+    states: &mut smithay::wayland::shell::xdg::ToplevelStateSet,
+    state: xdg_toplevel::State,
+    on: bool,
+) {
+    if on {
+        states.set(state);
+    } else {
+        states.unset(state);
     }
 }
 
