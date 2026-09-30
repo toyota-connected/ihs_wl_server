@@ -147,6 +147,38 @@ scaled to fit) and Close. It grants maximize and fullscreen, which hide the
 bar, and its minimize hides the view behind Restore (the client is told
 `suspended`).
 
+### Vulkan backend
+
+Build with `--backend drm-kms-vulkan`. A runnable holds one backend, so keep
+one directory per backend (`~/ihs-wl-example-vk`, say). Run it with the same
+environment as above and:
+
+```sh
+./homescreen -b . --backend drm-kms-vulkan \
+  --drm-device /dev/dri/card0 --drm-connector HDMI-A-1 -f
+```
+
+Options:
+
+- `IVI_DRMVK_PLANE_LAYERS=1`: give each layer its own KMS plane, so a client's
+  buffers are scanned out directly. By default the backend blends all layers
+  into one with Vulkan.
+- `--drm-explicit-sync auto|yes|no`: fence the commits with `IN_FENCE_FD`
+  (`no` takes the CPU-fence path; `IVI_DRMVK_NO_EXPLICIT_SYNC` is the older
+  spelling of `no`).
+- `IVI_DRMVK_VSYNC=0`: pace on the wall clock instead of page-flip events, to
+  bisect pacing problems.
+
+On the Pi 5 (Mesa 25.0, v3dv), small client buffers (GTK menus) only import
+with
+[ivi-homescreen#694](https://github.com/toyota-connected/ivi-homescreen/pull/694).
+
+Vulkan clients:
+
+- `vkcube --wsi wayland` (`vulkan-tools`).
+- `mpv --gpu-api=vulkan` fails on v3dv (its swapchain runs out of memory); use
+  `--gpu-api=opengl`.
+
 ### Client notes
 
 - **GTK 4** (and Chromium): with no `WAYLAND_DISPLAY` in the Pi's session,
