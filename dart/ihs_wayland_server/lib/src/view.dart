@@ -24,6 +24,11 @@ const String _viewType = 'ihs_wl/toplevel';
 /// over toplevels launched with a token, which are for the views naming
 /// theirs. Until a matching client maps, the view is empty.
 ///
+/// The client is asked for the view's size as it is laid out, and follows
+/// it through every layout change. With a [requestedSize] it is asked for
+/// that size instead, and its content is scaled to fit the view, aspect
+/// kept, centered.
+///
 /// Pointer and touch input over the view go to the client under it, and the
 /// mouse cursor over it is the one the client asks for. The view takes
 /// keyboard focus when pressed and gives it up on a press anywhere else;
@@ -33,6 +38,7 @@ class WaylandToplevelView extends StatefulWidget {
     super.key,
     this.activationToken,
     this.appId,
+    this.requestedSize,
     this.focusNode,
     this.autofocus = false,
   });
@@ -40,6 +46,12 @@ class WaylandToplevelView extends StatefulWidget {
   /// The token the client was launched with.
   final String? activationToken;
   final String? appId;
+
+  /// The size to ask the client for, in logical pixels, instead of the
+  /// view's. Its content is scaled to fit the view, aspect kept, centered,
+  /// and input is mapped back. A client may still commit another size; it
+  /// is then scaled as if it had taken this one. Null follows the view.
+  final Size? requestedSize;
 
   /// Keyboard focus for the client; one is made when null.
   final FocusNode? focusNode;
@@ -66,8 +78,20 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
 
   void _created(int id) {
     _viewId = id;
+    // The creation params carry the size the view was built with; this one
+    // may have changed since.
+    waylandInput?.requestSize(id, widget.requestedSize);
     if (_focus.hasFocus) {
       waylandInput?.focus(id, true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(WaylandToplevelView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final int? id = _viewId;
+    if (id != null && widget.requestedSize != oldWidget.requestedSize) {
+      waylandInput?.requestSize(id, widget.requestedSize);
     }
   }
 
@@ -107,6 +131,11 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
 
   @override
   Widget build(BuildContext context) {
+    final Size? requested = widget.requestedSize;
+    assert(
+      requested == null || (requested.isFinite && !requested.isEmpty),
+      'requestedSize must be finite and positive: $requested',
+    );
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     return Focus(
       focusNode: _focus,
@@ -153,6 +182,8 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                         'token': widget.activationToken,
                         'app_id': widget.appId,
                         'dpr': dpr,
+                        'requested_width': widget.requestedSize?.width,
+                        'requested_height': widget.requestedSize?.height,
                       },
                       onCreated: (int id) {
                         _created(id);

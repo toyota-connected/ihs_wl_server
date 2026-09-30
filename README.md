@@ -25,7 +25,7 @@ Early development. Working today:
   `wl_seat`, `wp_cursor_shape_manager_v1`, `xdg_activation_v1`,
   `wl_data_device_manager`, `wl_output` and `zxdg_output_manager_v1`.
 - A view binds to a toplevel by activation token or app_id and configures
-  it to the view's size. `xdg_activation_v1` carries the token: a client
+  it to the view's size, or to a size the view requests, scaled to fit. `xdg_activation_v1` carries the token: a client
   started with one the module issued (`ihs_wl_activation_token`) in
   `XDG_ACTIVATION_TOKEN` activates its toplevel with it, as GTK and Qt do.
 - A toplevel's surface tree (the root and its subsurfaces, with viewports,
@@ -224,6 +224,11 @@ hooks:
 
 `dart/ihs_wayland_server/example` is a minimal app; its `emb.yaml` builds it
 with emb against ivi-homescreen.
+
+A view configures its client to the view's size and follows every layout
+change. `WaylandToplevelView(requestedSize: Size(800, 600))` asks the client
+for that size instead; its content is scaled to fit the view, aspect kept,
+centered, and input is mapped back (`ihs_wl_view_size` in the C ABI).
 
 `WaylandServer.start` is idempotent. After a hot restart the server is still
 running. Its clients carry on, and the re-created views bind to their

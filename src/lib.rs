@@ -355,6 +355,33 @@ pub extern "C" fn ihs_wl_focus(view_id: i32, focused: u32) -> c_int {
     })
 }
 
+/// Ask the client of the view `view_id` for `width` x `height` logical
+/// pixels instead of the view's size; its content is scaled to fit the view,
+/// aspect kept, centered, and input is mapped back. 0 x 0 goes back to the
+/// view's size. Any thread; only enqueues.
+#[no_mangle]
+pub extern "C" fn ihs_wl_view_size(view_id: i32, width: f64, height: f64) -> c_int {
+    guard("ihs_wl_view_size", || {
+        if !(width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0)
+            || ((width == 0.0) != (height == 0.0))
+        {
+            return Err(Error::invalid(format!("bad view size {width} x {height}")));
+        }
+        thread::send(thread::Cmd::ViewRequestSize {
+            view_id,
+            size: requested_size(width, height),
+        })?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
+}
+
+/// A requested client size in whole logical pixels: None unless both sides
+/// are positive.
+pub(crate) fn requested_size(width: f64, height: f64) -> Option<(i32, i32)> {
+    let side = |v: f64| (v.round() as i32).max(1);
+    (width > 0.0 && height > 0.0).then(|| (side(width), side(height)))
+}
+
 /// The message for the last failed call on this thread; never NULL, empty
 /// when there has been none. Valid until the next call on this thread.
 #[no_mangle]

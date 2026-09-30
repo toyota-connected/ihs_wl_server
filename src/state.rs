@@ -140,6 +140,81 @@ pub struct ViewEntry {
     pub frames: Frames,
     /// Out of the scene: nothing it shows is reported.
     pub suspended: bool,
+    /// The size the client is asked for instead of the view's, in logical
+    /// pixels; its content is then scaled to fit the view.
+    pub requested: Option<(i32, i32)>,
+}
+
+/// Where the client's logical space sits in its view: scaled by `scale`
+/// about the view's origin, then moved by `offset` (view-local logical
+/// pixels). The identity unless the view asks the client for a size of its
+/// own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fit {
+    pub scale: f64,
+    pub offset: (f64, f64),
+}
+
+impl Fit {
+    pub const IDENTITY: Fit = Fit {
+        scale: 1.0,
+        offset: (0.0, 0.0),
+    };
+
+    /// @p requested scaled to fit @p view (both logical), aspect kept,
+    /// centered.
+    pub fn contain(view: (f64, f64), requested: (i32, i32)) -> Fit {
+        let (rw, rh) = (requested.0 as f64, requested.1 as f64);
+        let scale = (view.0 / rw).min(view.1 / rh);
+        if !scale.is_finite() || scale <= 0.0 {
+            return Fit::IDENTITY;
+        }
+        Fit {
+            scale,
+            offset: ((view.0 - rw * scale) / 2.0, (view.1 - rh * scale) / 2.0),
+        }
+    }
+
+    /// @p p, in the client's logical space, in the view's.
+    pub fn to_view(self, (x, y): (f64, f64)) -> (f64, f64) {
+        (
+            x * self.scale + self.offset.0,
+            y * self.scale + self.offset.1,
+        )
+    }
+
+    /// @p p, in the view's logical space, in the client's.
+    pub fn to_client(self, (x, y): (f64, f64)) -> (f64, f64) {
+        (
+            (x - self.offset.0) / self.scale,
+            (y - self.offset.1) / self.scale,
+        )
+    }
+}
+
+impl ViewEntry {
+    /// Its laid-out size in logical pixels, once known.
+    fn logical_size(&self) -> Option<(i32, i32)> {
+        let (w, h) = self.size?;
+        Some((
+            (w as f64 / self.dpr).round() as i32,
+            (h as f64 / self.dpr).round() as i32,
+        ))
+    }
+
+    /// The size its client is configured to, in logical pixels: the
+    /// requested size, else the view's own.
+    pub fn client_size(&self) -> Option<(i32, i32)> {
+        self.requested.or_else(|| self.logical_size())
+    }
+
+    /// Where its client's content sits in it.
+    pub fn fit(&self) -> Fit {
+        let (Some(requested), Some((w, h))) = (self.requested, self.size) else {
+            return Fit::IDENTITY;
+        };
+        Fit::contain((w as f64 / self.dpr, h as f64 / self.dpr), requested)
+    }
 }
 
 impl State {
@@ -251,6 +326,7 @@ impl State {
                 let id = view.id;
                 let size = view.size;
                 let dpr = view.params.dpr.unwrap_or(1.0);
+                let requested = view.params.requested;
                 // One output stands for the display every view is on.
                 self.output
                     .change_current_state(None, None, Some(Scale::Fractional(dpr)), None);
@@ -272,6 +348,7 @@ impl State {
                         cleared: false,
                         frames: Frames::default(),
                         suspended: false,
+                        requested,
                     },
                 );
                 self.try_bind_view(id);
@@ -289,10 +366,28 @@ impl State {
                 width,
                 height,
             } => {
-                if let Some(entry) = self.views.get_mut(&view_id) {
-                    entry.size = Some((width, height));
-                }
+                let Some(entry) = self.views.get_mut(&view_id) else {
+                    return;
+                };
+                entry.size = Some((width, height));
+                let requested = entry.requested.is_some();
                 self.configure_view(view_id);
+                // The client keeps its size, so nothing it commits moves its
+                // content to the view's new fit.
+                if requested {
+                    self.refit_view(view_id);
+                }
+            }
+            Cmd::ViewRequestSize { view_id, size } => {
+                let Some(entry) = self.views.get_mut(&view_id) else {
+                    return;
+                };
+                if entry.requested == size {
+                    return;
+                }
+                entry.requested = size;
+                self.configure_view(view_id);
+                self.refit_view(view_id);
             }
             Cmd::Presented { view_id, report } => self.frame_presented(view_id, report),
             Cmd::ViewSuspended { view_id, suspended } => {
@@ -406,18 +501,26 @@ impl State {
         }
     }
 
-    /// Size the view's toplevel to the view, in logical pixels.
+    /// Show what view @p view_id last showed at its current fit. A commit
+    /// would too, but a client keeping its size has none to make.
+    fn refit_view(&mut self, view_id: i32) {
+        let Some(entry) = self.views.get(&view_id) else {
+            return;
+        };
+        if entry.seq > 0 && !entry.cleared {
+            self.submit_view(view_id);
+        }
+    }
+
+    /// Size the view's toplevel to its client size (the view's, unless it
+    /// requested one), in logical pixels.
     pub fn configure_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
         };
-        let (Some(toplevel_id), Some((w, h))) = (entry.toplevel, entry.size) else {
+        let (Some(toplevel_id), Some((w, h))) = (entry.toplevel, entry.client_size()) else {
             return;
         };
-        let (w, h) = (
-            (w as f64 / entry.dpr).round() as i32,
-            (h as f64 / entry.dpr).round() as i32,
-        );
         let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };
@@ -536,4 +639,27 @@ pub fn app_id_and_title(surface: &WlSurface) -> (String, String) {
             })
             .unwrap_or_default()
     })
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::Fit;
+
+    #[test]
+    fn contains_centers_and_maps_both_ways() {
+        let f = Fit::contain((400.0, 400.0), (800, 600));
+        assert_eq!(f.scale, 0.5);
+        assert_eq!(f.offset, (0.0, 50.0));
+        assert_eq!(f.to_view((800.0, 600.0)), (400.0, 350.0));
+        assert_eq!(f.to_client((200.0, 200.0)), (400.0, 300.0));
+
+        // Growing past the request scales up.
+        let f = Fit::contain((1600.0, 900.0), (800, 600));
+        assert_eq!(f.scale, 1.5);
+        assert_eq!(f.offset, (200.0, 0.0));
+
+        // A view not yet laid out shows it as is.
+        assert_eq!(Fit::contain((0.0, 0.0), (800, 600)), Fit::IDENTITY);
+        assert_eq!(Fit::IDENTITY.to_client((3.0, 4.0)), (3.0, 4.0));
+    }
 }

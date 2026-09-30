@@ -3,9 +3,11 @@
 
 //! Input from the Dart platform-view controller, onto the seat.
 //!
-//! Every event is for one view, in view-local logical pixels. The view's
-//! content starts at its toplevel's window geometry origin, so client-side
-//! shadows fall outside it, the same as tree.rs lays the layers out. What is
+//! Every event is for one view, in view-local logical pixels, mapped into
+//! its client's space when the view asked the client for a size of its own
+//! (see `Fit`). The view's content starts at its toplevel's window geometry
+//! origin, so client-side shadows fall outside it, the same as tree.rs lays
+//! the layers out. What is
 //! under a point is hit-tested against the tree the view shows, input
 //! regions included. Keys go to the view Dart last gave focus to, if it
 //! shows a toplevel and is in the scene.
@@ -86,6 +88,20 @@ impl State {
             .map(|(surface, loc)| (surface, loc.to_f64()))
     }
 
+    /// @p x, @p y in view @p view_id's logical space, in its client's: the
+    /// same unless the view asked the client for a size of its own.
+    fn client_point(&self, view_id: i32, x: f64, y: f64) -> Point<f64, Logical> {
+        self.views
+            .get(&view_id)
+            .map_or((x, y), |v| v.fit().to_client((x, y)))
+            .into()
+    }
+
+    /// Scroll distances scale with the content.
+    fn client_scale(&self, view_id: i32) -> f64 {
+        self.views.get(&view_id).map_or(1.0, |v| v.fit().scale)
+    }
+
     fn pointer_in_view(&self, view_id: i32) -> bool {
         self.devices
             .pointer
@@ -96,7 +112,7 @@ impl State {
     pub fn pointer_input(&mut self, view_id: i32, ev: IhsWlPointerEvent) {
         let pointer = self.devices.pointer.clone();
         let time = time_ms(ev.time_us);
-        let at: Point<f64, Logical> = (ev.x, ev.y).into();
+        let at = self.client_point(view_id, ev.x, ev.y);
         let motion = |state: &mut State, focus| {
             pointer.motion(
                 state,
@@ -163,12 +179,13 @@ impl State {
                     _ => AxisSource::Wheel,
                 };
                 let mut frame = AxisFrame::new(time).source(source);
+                let scale = self.client_scale(view_id);
                 for (axis, value, v120) in [
                     (Axis::Horizontal, ev.axis_x, ev.value120_x),
                     (Axis::Vertical, ev.axis_y, ev.value120_y),
                 ] {
                     if value != 0.0 {
-                        frame = frame.value(axis, value);
+                        frame = frame.value(axis, value / scale);
                     }
                     if v120 != 0 {
                         frame = frame.v120(axis, v120);
@@ -185,7 +202,7 @@ impl State {
         let touch = self.devices.touch.clone();
         let time = time_ms(ev.time_us);
         let slot = Some(ev.slot as u32).into();
-        let at: Point<f64, Logical> = (ev.x, ev.y).into();
+        let at = self.client_point(view_id, ev.x, ev.y);
         match ev.kind {
             k if k == T::Down as u32 => {
                 let focus = self.surface_under(view_id, at);

@@ -74,14 +74,10 @@ impl State {
         )
     }
 
-    /// The view's logical size, once laid out.
+    /// The client's logical size in the view, once laid out: the size it
+    /// was asked for.
     fn view_logical_size(&self, view_id: i32) -> Option<(i32, i32)> {
-        let entry = self.views.get(&view_id)?;
-        let (w, h) = entry.size?;
-        Some((
-            (w as f64 / entry.dpr).round() as i32,
-            (h as f64 / entry.dpr).round() as i32,
-        ))
+        self.views.get(&view_id)?.client_size()
     }
 
     /// Place @p popup where its positioner asks, moved or flipped as it

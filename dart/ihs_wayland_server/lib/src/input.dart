@@ -235,4 +235,9 @@ class WaylandInput {
   /// The view gained or lost keyboard focus.
   void focus(int viewId, bool focused) =>
       _lib.ihs_wl_focus(viewId, focused ? 1 : 0);
+
+  /// Ask the view's client for [size] in logical pixels instead of the
+  /// view's own; null goes back to the view's.
+  void requestSize(int viewId, Size? size) =>
+      _lib.ihs_wl_view_size(viewId, size?.width ?? 0.0, size?.height ?? 0.0);
 }
