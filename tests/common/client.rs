@@ -64,6 +64,8 @@ struct App {
     configured: bool,
     /// The size of the toplevel's last configure.
     configure_size: Option<(i32, i32)>,
+    /// The states of the toplevel's last configure.
+    configure_states: Vec<u32>,
     /// wl_buffer.release events, by the client's buffer index.
     released: HashMap<usize, u32>,
     frames_done: u32,
@@ -509,6 +511,20 @@ impl Client {
         self.app.configure_size
     }
 
+    /// The toplevel's last configure said it is not visible.
+    pub fn suspended(&self) -> bool {
+        self.app
+            .configure_states
+            .contains(&(xdg_toplevel::State::Suspended as u32))
+    }
+
+    /// The toplevel's last configure said it is the active window.
+    pub fn activated(&self) -> bool {
+        self.app
+            .configure_states
+            .contains(&(xdg_toplevel::State::Activated as u32))
+    }
+
     /// Dispatch until @p done holds, or give up after a few seconds.
     pub fn dispatch_until(&mut self, what: &str, done: impl Fn(&Client) -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -560,7 +576,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                     app.dmabuf_version = version;
                     app.dmabuf = Some(registry.bind(name, version.min(4), qh, ()))
                 }
-                "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
+                "xdg_wm_base" => app.wm_base = Some(registry.bind(name, version.min(6), qh, ())),
                 "wp_presentation" => {
                     app.presentation = Some(registry.bind(name, version.min(2), qh, ()))
                 }
@@ -711,8 +727,17 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_toplevel::Event::Configure { width, height, .. } = event {
+        if let xdg_toplevel::Event::Configure {
+            width,
+            height,
+            states,
+        } = event
+        {
             app.configure_size = Some((width, height));
+            app.configure_states = states
+                .chunks_exact(4)
+                .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
         }
     }
 }

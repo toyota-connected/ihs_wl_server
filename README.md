@@ -64,6 +64,10 @@ Early development. Working today:
   commit with a target time is applied one refresh ahead of the first vblank
   at or after it. For views off screen, a clock at the display's refresh
   stands in for the reports.
+- A toplevel is `activated` only while its view has keyboard focus and is
+  in the scene. When the view leaves the scene (scrolled off, occluded, its
+  display gone), the toplevel is `suspended` (xdg-shell v6) so the client
+  can stop rendering, and its frame callbacks wait until it is back.
 - Popups (menus, tooltips) show above their toplevel in its view, placed
   inside it as their positioner allows. A popup that grabs keeps input on
   its client until a press lands outside it; popups also close when their

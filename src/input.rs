@@ -298,9 +298,12 @@ impl State {
         }
     }
 
-    /// Point the keyboard at what the focused view shows now: after focus,
-    /// binding, unbinding or suspension changed it.
+    /// Point the keyboard, and the activated state, at what the focused
+    /// view shows now, and mark suspended toplevels: after focus, binding,
+    /// unbinding or suspension changed them.
     pub fn refresh_keyboard_focus(&mut self) {
+        // The active window follows focus, keyboard or not.
+        self.sync_states();
         let Some(keyboard) = self.devices.keyboard.clone() else {
             return;
         };

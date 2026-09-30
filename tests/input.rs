@@ -338,3 +338,33 @@ fn malformed_input_is_rejected() {
     assert_eq!(unsafe { ihs_wl_touch(1, &ev) }, invalid);
     assert_eq!(ihs_wl_key(1, 0x300, 1, 0), invalid);
 }
+
+#[test]
+fn the_toplevel_is_activated_with_focus_and_suspended_off_screen() {
+    let _serial = serial();
+    let mut h = shown("ihs-wl-test-activated");
+    // Bound and on screen, but Dart has not given the view focus.
+    h.client.roundtrip();
+    assert!(!h.client.activated(), "activated without focus");
+    assert!(!h.client.suspended(), "suspended on screen");
+
+    assert_eq!(ihs_wl_focus(1, 1), 0);
+    h.client
+        .dispatch_until("activated on focus", |c| c.activated());
+
+    // Out of the scene: suspended, and not the active window even with
+    // focus.
+    mock_host::set_suspended(1, true);
+    h.client.dispatch_until("suspended, deactivated", |c| {
+        c.suspended() && !c.activated()
+    });
+    mock_host::set_suspended(1, false);
+    h.client.dispatch_until("back: resumed, activated", |c| {
+        !c.suspended() && c.activated()
+    });
+
+    assert_eq!(ihs_wl_focus(1, 0), 0);
+    h.client
+        .dispatch_until("deactivated on unfocus", |c| !c.activated());
+    mock_host::dispose_view(1);
+}
