@@ -116,6 +116,17 @@ class IhsWlBindings {
   late final _ihs_wl_focus = _ihs_wl_focusPtr
       .asFunction<int Function(int, int)>();
 
+  int ihs_wl_view_size(int view_id, double width, double height) {
+    return _ihs_wl_view_size(view_id, width, height);
+  }
+
+  late final _ihs_wl_view_sizePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int Function(ffi.Int32, ffi.Double, ffi.Double)>
+      >('ihs_wl_view_size');
+  late final _ihs_wl_view_size = _ihs_wl_view_sizePtr
+      .asFunction<int Function(int, double, double)>();
+
   ffi.Pointer<ffi.Char> ihs_wl_last_error() {
     return _ihs_wl_last_error();
   }

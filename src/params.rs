@@ -29,6 +29,9 @@ pub struct ViewParams {
     pub app_id: Option<String>,
     /// Device pixel ratio of the view.
     pub dpr: Option<f64>,
+    /// The size to ask the client for instead of the view's, in logical
+    /// pixels; both of `requested_width` and `requested_height`, positive.
+    pub requested: Option<(i32, i32)>,
 }
 
 impl ViewParams {
@@ -38,14 +41,19 @@ impl ViewParams {
             Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
             _ => None,
         };
+        let positive = |key: &str| match map.get(key) {
+            Some(Value::Double(d)) if d.is_finite() && *d > 0.0 => Some(*d),
+            Some(Value::Int(i)) if *i > 0 => Some(*i as f64),
+            _ => None,
+        };
         ViewParams {
             token: string("token"),
             app_id: string("app_id"),
-            dpr: match map.get("dpr") {
-                Some(Value::Double(d)) if d.is_finite() && *d > 0.0 => Some(*d),
-                Some(Value::Int(i)) if *i > 0 => Some(*i as f64),
-                _ => None,
-            },
+            dpr: positive("dpr"),
+            requested: crate::requested_size(
+                positive("requested_width").unwrap_or(0.0),
+                positive("requested_height").unwrap_or(0.0),
+            ),
         }
     }
 }
@@ -173,6 +181,28 @@ mod tests {
         assert_eq!(p.token, None);
         assert_eq!(p.app_id.as_deref(), Some("org.example.app"));
         assert_eq!(p.dpr, Some(1.5));
+    }
+
+    #[test]
+    fn decodes_a_requested_size_only_when_both_sides_are_positive() {
+        let map = |w: Option<i64>, h: Option<i64>| {
+            let mut b = vec![T_MAP, 0];
+            for (key, v) in [("requested_width", w), ("requested_height", h)] {
+                let Some(v) = v else { continue };
+                b[1] += 1;
+                b.push(T_STRING);
+                b.push(key.len() as u8);
+                b.extend_from_slice(key.as_bytes());
+                b.push(T_INT64);
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            ViewParams::decode(&b).requested
+        };
+        assert_eq!(map(Some(800), Some(600)), Some((800, 600)));
+        assert_eq!(map(Some(800), None), None);
+        assert_eq!(map(Some(800), Some(0)), None);
+        assert_eq!(map(Some(-1), Some(600)), None);
+        assert_eq!(ViewParams::decode(&encoded()).requested, None);
     }
 
     #[test]

@@ -30,7 +30,7 @@ use crate::buffers::BufferKey;
 use crate::egl_display::Content;
 use crate::ffi::ihs::sys;
 use crate::observe::{self, Observed};
-use crate::state::State;
+use crate::state::{Fit, State};
 use crate::timing::Taken;
 use crate::tree::{self, Held, LayerSpec};
 
@@ -228,18 +228,25 @@ fn close_frame(frame: &sys::IhsFrame) {
     }
 }
 
-/// @p v, a logical coordinate, in physical pixels.
-fn physical(v: i32, dpr: f64) -> i64 {
-    (v as f64 * dpr).round() as i64
+/// @p v, a logical coordinate in the view, in physical pixels.
+fn physical(v: f64, dpr: f64) -> i64 {
+    (v * dpr).round() as i64
 }
 
-fn layer_for(spec: &LayerSpec, prepared: &Prepared, dpr: f64) -> sys::IhsLayer {
+fn layer_for(spec: &LayerSpec, prepared: &Prepared, fit: Fit, dpr: f64) -> sys::IhsLayer {
     let (frame, image): (*const sys::IhsFrame, *const sys::IhsImage) = match prepared {
         Prepared::Frame(frame) => (frame, std::ptr::null()),
         Prepared::Image(image) => (std::ptr::null(), image),
     };
     let clamp_i = |v: i64| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
     let clamp_u = |v: i64| v.clamp(0, u32::MAX as i64) as u32;
+    // The client's logical space in the view's, then in physical pixels.
+    let dst = spec.dst;
+    let (x0, y0) = fit.to_view((dst.loc.x as f64, dst.loc.y as f64));
+    let (x1, y1) = fit.to_view((
+        (dst.loc.x + dst.size.w) as f64,
+        (dst.loc.y + dst.size.h) as f64,
+    ));
     sys::IhsLayer {
         struct_size: std::mem::size_of::<sys::IhsLayer>(),
         frame,
@@ -251,14 +258,10 @@ fn layer_for(spec: &LayerSpec, prepared: &Prepared, dpr: f64) -> sys::IhsLayer {
         src_w: clamp_u(fixed(spec.src.size.w)),
         src_h: clamp_u(fixed(spec.src.size.h)),
         // Edges round, not sizes, so neighbors stay flush.
-        dst_x: clamp_i(physical(spec.dst.loc.x, dpr)),
-        dst_y: clamp_i(physical(spec.dst.loc.y, dpr)),
-        dst_w: clamp_u(
-            physical(spec.dst.loc.x + spec.dst.size.w, dpr) - physical(spec.dst.loc.x, dpr),
-        ),
-        dst_h: clamp_u(
-            physical(spec.dst.loc.y + spec.dst.size.h, dpr) - physical(spec.dst.loc.y, dpr),
-        ),
+        dst_x: clamp_i(physical(x0, dpr)),
+        dst_y: clamp_i(physical(y0, dpr)),
+        dst_w: clamp_u(physical(x1, dpr) - physical(x0, dpr)),
+        dst_h: clamp_u(physical(y1, dpr) - physical(y0, dpr)),
         transform: spec.transform,
         opaque: spec.opaque as u8,
         content_type: 0,
@@ -346,11 +349,14 @@ impl State {
         }
         // Built after every frame and image is in place: the layers point
         // into `prepared`, which must not move again.
-        let dpr = self.views.get(&view_id).map_or(1.0, |v| v.dpr);
+        let (fit, dpr) = self
+            .views
+            .get(&view_id)
+            .map_or((Fit::IDENTITY, 1.0), |v| (v.fit(), v.dpr));
         let layers: Vec<sys::IhsLayer> = specs
             .iter()
             .zip(prepared.iter())
-            .map(|(spec, p)| layer_for(spec, p, dpr))
+            .map(|(spec, p)| layer_for(spec, p, fit, dpr))
             .collect();
         let mut release = vec![-1; layers.len()];
 
@@ -537,7 +543,7 @@ mod tests {
         assert_eq!(image.egl_image as usize, 0x1234);
         assert_eq!((image.width, image.height, image.buffer_id), (64, 32, 9));
         assert_eq!(image.external_oes, 1);
-        let layer = layer_for(&spec, &prepared, 1.0);
+        let layer = layer_for(&spec, &prepared, Fit::IDENTITY, 1.0);
         assert!(layer.frame.is_null());
         assert_eq!(layer.image, image as *const sys::IhsImage);
         assert_eq!(layer.layer_id, 7);

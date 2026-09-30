@@ -248,6 +248,14 @@ int ihs_wl_key(int32_t view_id, uint32_t evdev, uint32_t pressed, uint64_t time_
 int ihs_wl_focus(int32_t view_id, uint32_t focused);
 
 /*
+ Ask the client of the view `view_id` for `width` x `height` logical
+ pixels instead of the view's size; its content is scaled to fit the view,
+ aspect kept, centered, and input is mapped back. 0 x 0 goes back to the
+ view's size. Any thread; only enqueues.
+ */
+int ihs_wl_view_size(int32_t view_id, double width, double height);
+
+/*
  The message for the last failed call on this thread; never NULL, empty
  when there has been none. Valid until the next call on this thread.
  */

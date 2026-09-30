@@ -62,6 +62,11 @@ GTK and Qt clients activate their toplevel with the token unprompted; show a
 client that ignores it by app_id instead. Without either, a view shows the
 oldest toplevel not shown elsewhere.
 
+A view configures its client to the view's size and follows every layout
+change. `WaylandToplevelView(requestedSize: Size(800, 600))` asks the client
+for that size instead; its content is scaled to fit the view, aspect kept,
+centered, and input is mapped back (`ihs_wl_view_size` in the C ABI).
+
 `WaylandServer.start` is idempotent: after a hot restart the server and its
 clients carry on, and the re-created views bind to their toplevels again.
 

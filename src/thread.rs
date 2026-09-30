@@ -36,6 +36,12 @@ pub enum Cmd {
         width: i32,
         height: i32,
     },
+    /// Ask the view's client for this size, in logical pixels, instead of
+    /// the view's; None goes back to the view's.
+    ViewRequestSize {
+        view_id: i32,
+        size: Option<(i32, i32)>,
+    },
     /// The shell showed a frame of the view (display thread).
     Presented {
         view_id: i32,
