@@ -7,8 +7,12 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'bindings.g.dart' show IhsWlViewEvent;
+import 'events.dart';
 import 'input.dart';
 import 'server.dart';
+
+part 'controller.dart';
 
 /// The platform-view type the module's factory registers.
 const String _viewType = 'ihs_wl/toplevel';
@@ -29,6 +33,9 @@ const String _viewType = 'ihs_wl/toplevel';
 /// that size instead, and its content is scaled to fit the view, aspect
 /// kept, centered.
 ///
+/// A [controller] reports whether a toplevel is shown and the window-state
+/// changes its client asks for, and asks the client to close.
+///
 /// Pointer and touch input over the view go to the client under it, and the
 /// mouse cursor over it is the one the client asks for. The view takes
 /// keyboard focus when pressed and gives it up on a press anywhere else;
@@ -39,6 +46,7 @@ class WaylandToplevelView extends StatefulWidget {
     this.activationToken,
     this.appId,
     this.requestedSize,
+    this.controller,
     this.focusNode,
     this.autofocus = false,
   });
@@ -52,6 +60,9 @@ class WaylandToplevelView extends StatefulWidget {
   /// and input is mapped back. A client may still commit another size; it
   /// is then scaled as if it had taken this one. Null follows the view.
   final Size? requestedSize;
+
+  /// Reports what happens to the toplevel shown, and closes it.
+  final WaylandToplevelController? controller;
 
   /// Keyboard focus for the client; one is made when null.
   final FocusNode? focusNode;
@@ -70,14 +81,60 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   /// The platform-view id, once created.
   int? _viewId;
 
+  /// The id events are taken for: known before the view is created.
+  int? _watchedId;
+
+  /// A toplevel is shown.
+  bool _bound = false;
+
   @override
   void dispose() {
+    final int? watched = _watchedId;
+    if (watched != null) {
+      ViewEvents.unwatch(watched);
+    }
+    widget.controller?._attach(null, false);
     _ownFocus?.dispose();
     super.dispose();
   }
 
+  void _watch(int id) {
+    final int? old = _watchedId;
+    if (old != null) {
+      ViewEvents.unwatch(old);
+    }
+    _watchedId = id;
+    _bound = false;
+    ViewEvents.watch(id, _onViewEvent);
+  }
+
+  void _onViewEvent(IhsWlViewEvent event) {
+    final WaylandToplevelController? controller = widget.controller;
+    final WaylandWindowRequest? request = switch (event) {
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_BOUND ||
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_CLOSED => null,
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_MAXIMIZE_REQUESTED =>
+        WaylandWindowRequest.maximize,
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_UNMAXIMIZE_REQUESTED =>
+        WaylandWindowRequest.unmaximize,
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_MINIMIZE_REQUESTED =>
+        WaylandWindowRequest.minimize,
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_FULLSCREEN_REQUESTED =>
+        WaylandWindowRequest.fullscreen,
+      IhsWlViewEvent.IHS_WL_VIEW_EVENT_UNFULLSCREEN_REQUESTED =>
+        WaylandWindowRequest.unfullscreen,
+    };
+    if (request != null) {
+      controller?.onWindowRequest?.call(request);
+      return;
+    }
+    _bound = event == IhsWlViewEvent.IHS_WL_VIEW_EVENT_BOUND;
+    controller?._setBound(_bound);
+  }
+
   void _created(int id) {
     _viewId = id;
+    widget.controller?._attach(id, _bound);
     // The creation params carry the size the view was built with; this one
     // may have changed since.
     waylandInput?.requestSize(id, widget.requestedSize);
@@ -89,6 +146,10 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   @override
   void didUpdateWidget(WaylandToplevelView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.controller != oldWidget.controller) {
+      oldWidget.controller?._attach(null, false);
+      widget.controller?._attach(_viewId, _bound);
+    }
     final int? id = _viewId;
     if (id != null && widget.requestedSize != oldWidget.requestedSize) {
       waylandInput?.requestSize(id, widget.requestedSize);
@@ -174,6 +235,9 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                         );
                       },
                   onCreatePlatformView: (PlatformViewCreationParams params) {
+                    // Before the create: a bind can land while it is in
+                    // flight.
+                    _watch(params.id);
                     // PlatformViewLink calls create(size:) once laid out, so
                     // the view is created at its real size rather than 0x0.
                     return _ToplevelViewController(

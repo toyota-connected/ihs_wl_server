@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 import 'bindings.g.dart';
+import 'events.dart';
 import 'input.dart';
 import 'loader.dart';
 
@@ -55,6 +56,7 @@ class WaylandServer {
       ),
     );
     server._start(socketName);
+    ViewEvents.listen(server._lib);
     return server;
   }
 
@@ -126,7 +128,10 @@ class WaylandServer {
   }
 
   /// Disconnect every client and stop the server.
-  void stop() => _lib.ihs_wl_stop();
+  void stop() {
+    ViewEvents.close(_lib);
+    _lib.ihs_wl_stop();
+  }
 
   WaylandServerException _error(String call, int rc) => WaylandServerException(
     call,

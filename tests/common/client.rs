@@ -66,6 +66,8 @@ struct App {
     configure_size: Option<(i32, i32)>,
     /// The states of the toplevel's last configure.
     configure_states: Vec<u32>,
+    /// xdg_toplevel.close events.
+    close_requests: u32,
     /// wl_buffer.release events, by the client's buffer index.
     released: HashMap<usize, u32>,
     frames_done: u32,
@@ -511,6 +513,28 @@ impl Client {
         self.app.configure_size
     }
 
+    /// The toplevel, once created.
+    pub fn toplevel(&self) -> &xdg_toplevel::XdgToplevel {
+        self._toplevel.as_ref().expect("no toplevel")
+    }
+
+    /// xdg_toplevel.close events so far.
+    pub fn close_requests(&self) -> u32 {
+        self.app.close_requests
+    }
+
+    /// Close the toplevel, as a client does when asked to or when its user
+    /// closes it.
+    pub fn destroy_toplevel(&mut self) {
+        if let Some(t) = self._toplevel.take() {
+            t.destroy();
+        }
+        if let Some(x) = self.xdg.take() {
+            x.destroy();
+        }
+        self.roundtrip();
+    }
+
     /// The toplevel's last configure said it is not visible.
     pub fn suspended(&self) -> bool {
         self.app
@@ -738,6 +762,8 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
                 .chunks_exact(4)
                 .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
+        } else if let xdg_toplevel::Event::Close = event {
+            app.close_requests += 1;
         }
     }
 }

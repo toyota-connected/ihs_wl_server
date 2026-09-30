@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
+import 'package:ihs_wayland_server/src/events.dart';
 
 void main() {
   testWidgets('a press takes focus, a press elsewhere gives it up', (
@@ -65,5 +66,58 @@ void main() {
     await tester.pump();
     expect(params?['requested_width'], 800.0);
     expect(params?['requested_height'], 600.0);
+  });
+
+  testWidgets('the controller follows the view events', (
+    WidgetTester tester,
+  ) async {
+    int? viewId;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform_views,
+      (MethodCall call) async {
+        if (call.method == 'create') {
+          viewId = (call.arguments as Map<Object?, Object?>)['id']! as int;
+        }
+        return null;
+      },
+    );
+    final List<WaylandWindowRequest> requests = <WaylandWindowRequest>[];
+    final WaylandToplevelController controller = WaylandToplevelController(
+      onWindowRequest: requests.add,
+    );
+    addTearDown(controller.dispose);
+    int notified = 0;
+    controller.addListener(() => notified++);
+    await tester.pumpWidget(
+      WidgetsApp(
+        color: const Color(0xff000000),
+        builder: (BuildContext context, Widget? child) =>
+            WaylandToplevelView(controller: controller),
+      ),
+    );
+    await tester.pump();
+    final int id = viewId!;
+    expect(controller.isBound, isFalse);
+
+    ViewEvents.dispatch(<int>[1, id]); // bound
+    expect(controller.isBound, isTrue);
+    ViewEvents.dispatch(<int>[3, id]); // maximize
+    ViewEvents.dispatch(<int>[4, id]); // unmaximize
+    ViewEvents.dispatch(<int>[5, id]); // minimize
+    ViewEvents.dispatch(<int>[99, id]); // a newer server's event
+    ViewEvents.dispatch(<int>[3, id + 1]); // another view
+    expect(requests, <WaylandWindowRequest>[
+      WaylandWindowRequest.maximize,
+      WaylandWindowRequest.unmaximize,
+      WaylandWindowRequest.minimize,
+    ]);
+    ViewEvents.dispatch(<int>[2, id]); // closed
+    expect(controller.isBound, isFalse);
+    expect(notified, 2);
+
+    // Gone with its view.
+    await tester.pumpWidget(const SizedBox());
+    ViewEvents.dispatch(<int>[1, id]);
+    expect(controller.isBound, isFalse);
   });
 }

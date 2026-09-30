@@ -21,6 +21,7 @@ mod config;
 mod cursor;
 mod egl_display;
 mod error;
+mod events;
 #[doc(hidden)]
 pub mod ffi;
 #[doc(hidden)]
@@ -80,6 +81,30 @@ pub struct IhsWlConfig {
     /// Socket name under `$XDG_RUNTIME_DIR`. NULL = auto: `wayland-ihs-N` when
     /// this process is itself a Wayland client, else `wayland-N`.
     pub socket_name: *const c_char,
+}
+
+/// What happened to a view, as posted to the event port
+/// (`ihs_wl_set_event_port`) in a list `[event, view_id]`.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IhsWlViewEvent {
+    /// The view shows a toplevel now.
+    Bound = 1,
+    /// Its toplevel went away (the client closed it or disconnected); the
+    /// view shows nothing until another binds.
+    Closed = 2,
+    /// The client asked to be maximized (its maximize button, a title bar
+    /// double-click). The toplevel stays the view's size; the app decides
+    /// what the view does.
+    MaximizeRequested = 3,
+    /// The client asked to leave maximized (restore).
+    UnmaximizeRequested = 4,
+    /// The client asked to be minimized.
+    MinimizeRequested = 5,
+    /// The client asked for fullscreen.
+    FullscreenRequested = 6,
+    /// The client asked to leave fullscreen.
+    UnfullscreenRequested = 7,
 }
 
 /// `IhsWlPointerEvent::kind`.
@@ -351,6 +376,34 @@ pub extern "C" fn ihs_wl_focus(view_id: i32, focused: u32) -> c_int {
             view_id,
             focused: focused != 0,
         })?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
+}
+
+/// Ask the client of the toplevel the view `view_id` shows to close it
+/// (`xdg_toplevel.close`). The client decides: it may ask its user first, or
+/// refuse. When it closes, `IHS_WL_VIEW_EVENT_CLOSED` is posted. Any thread;
+/// only enqueues. A view showing nothing is left alone.
+#[no_mangle]
+pub extern "C" fn ihs_wl_view_close(view_id: i32) -> c_int {
+    guard("ihs_wl_view_close", || {
+        thread::send(thread::Cmd::ViewClose(view_id))?;
+        Ok(IhsWlResult::Ok as c_int)
+    })
+}
+
+/// Post view events (`IhsWlViewEvent`) from now on to the Dart native port
+/// `port` with `post`, which is `NativeApi.postCObject`; each is a list
+/// `[event, view_id]`. NULL `post` stops. A port whose isolate is gone only
+/// drops them, so after a hot restart the new isolate registers its own.
+/// Any thread.
+#[no_mangle]
+pub extern "C" fn ihs_wl_set_event_port(
+    post: Option<unsafe extern "C" fn(port: i64, message: *mut std::ffi::c_void) -> bool>,
+    port: i64,
+) -> c_int {
+    guard("ihs_wl_set_event_port", || {
+        events::set_sink(post.map(|p| (p, port)));
         Ok(IhsWlResult::Ok as c_int)
     })
 }

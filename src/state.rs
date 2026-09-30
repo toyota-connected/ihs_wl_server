@@ -383,6 +383,12 @@ impl State {
                     self.refit_view(view_id);
                 }
             }
+            Cmd::ViewClose(view_id) => {
+                let toplevel = self.views.get(&view_id).and_then(|v| v.toplevel);
+                if let Some(t) = toplevel.and_then(|id| self.toplevels.by_id.get(&id)) {
+                    t.surface.send_close();
+                }
+            }
             Cmd::ViewRequestSize { view_id, size } => {
                 let Some(entry) = self.views.get_mut(&view_id) else {
                     return;
@@ -454,6 +460,7 @@ impl State {
             view_id,
             toplevel_id,
         });
+        crate::events::post(crate::IhsWlViewEvent::Bound, view_id);
         // Known before the first configure, so the client sizes its first
         // buffer for it.
         self.scale_tree(view_id);
@@ -503,6 +510,8 @@ impl State {
         let view = self.toplevels.by_id.get(&toplevel_id).and_then(|t| t.view);
         if let Some(view_id) = view {
             self.unbind_view(view_id);
+            // Not from unbind_view: a disposed view's widget is gone.
+            crate::events::post(crate::IhsWlViewEvent::Closed, view_id);
         }
     }
 
