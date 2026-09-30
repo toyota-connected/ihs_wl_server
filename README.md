@@ -321,6 +321,10 @@ The integration tests run the server against a mock of the shell's
 platform-view interface and drive it with a real Wayland client. In place of
 dma-bufs, the client uses memfds; the server never reads buffer contents.
 
+[docs/development.md](docs/development.md) covers the Dart package's checks,
+and running the example app with real clients (GTK 4, Chromium, mpv) on a
+Raspberry Pi 5.
+
 ## License
 
 Apache-2.0; see [LICENSE](LICENSE).
