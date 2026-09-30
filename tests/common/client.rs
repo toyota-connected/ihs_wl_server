@@ -66,6 +66,11 @@ struct App {
     configure_size: Option<(i32, i32)>,
     /// The states of the toplevel's last configure.
     configure_states: Vec<u32>,
+    /// The states of each toplevel's last configure, by protocol id.
+    toplevel_states: HashMap<u32, Vec<u32>>,
+    /// The protocol id of the main toplevel: its configures fill
+    /// configure_size and configure_states, a dialog's do not.
+    main_toplevel: Option<u32>,
     /// xdg_toplevel.close events.
     close_requests: u32,
     /// The last xdg_toplevel.wm_capabilities, once sent.
@@ -311,6 +316,7 @@ impl Client {
         self.queue.roundtrip(&mut self.app).unwrap();
         self.app.toplevel_surface = surface.id().protocol_id();
         self._surface = Some(surface);
+        self.app.main_toplevel = Some(toplevel.id().protocol_id());
         self._toplevel = Some(toplevel);
         self.xdg = Some(xdg);
     }
@@ -343,6 +349,7 @@ impl Client {
         }
         self.app.toplevel_surface = surface.id().protocol_id();
         self._surface = Some(surface);
+        self.app.main_toplevel = Some(toplevel.id().protocol_id());
         self._toplevel = Some(toplevel);
         self.xdg = Some(xdg);
     }
@@ -540,6 +547,62 @@ impl Client {
             x.destroy();
         }
         self.roundtrip();
+    }
+
+    /// A toplevel with the main toplevel as its parent -- a dialog -- mapped
+    /// with buffer @p index once configured.
+    pub fn create_dialog(&mut self, title: &str, index: usize) -> Dialog {
+        let qh = self.queue.handle();
+        let surface = self
+            .app
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&qh, ());
+        let xdg = self
+            .app
+            .wm_base
+            .as_ref()
+            .unwrap()
+            .get_xdg_surface(&surface, &qh, ());
+        let toplevel = xdg.get_toplevel(&qh, ());
+        toplevel.set_parent(self._toplevel.as_ref());
+        toplevel.set_title(title.into());
+        surface.commit();
+        let id = toplevel.id().protocol_id();
+        while !self.app.toplevel_states.contains_key(&id) {
+            self.queue.blocking_dispatch(&mut self.app).unwrap();
+        }
+        let (buffer, _) = self.buffers[index].as_ref().unwrap();
+        surface.attach(Some(buffer), 0, 0);
+        surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        surface.commit();
+        self.roundtrip();
+        Dialog {
+            surface,
+            xdg,
+            toplevel,
+        }
+    }
+
+    /// Close @p dialog, as its client does when its user dismisses it.
+    pub fn destroy_dialog(&mut self, dialog: Dialog) {
+        dialog.toplevel.destroy();
+        dialog.xdg.destroy();
+        dialog.surface.destroy();
+        self.roundtrip();
+    }
+
+    /// @p toplevel's last configure had @p state.
+    pub fn toplevel_has_state(
+        &self,
+        toplevel: &xdg_toplevel::XdgToplevel,
+        state: xdg_toplevel::State,
+    ) -> bool {
+        self.app
+            .toplevel_states
+            .get(&toplevel.id().protocol_id())
+            .is_some_and(|s| s.contains(&(state as u32)))
     }
 
     /// The toplevel's last configure had @p state.
@@ -757,7 +820,7 @@ delegate_noop!(App: ignore zwp_linux_buffer_params_v1::ZwpLinuxBufferParamsV1);
 impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
     fn event(
         app: &mut Self,
-        _: &xdg_toplevel::XdgToplevel,
+        toplevel: &xdg_toplevel::XdgToplevel,
         event: xdg_toplevel::Event,
         _: &(),
         _: &Connection,
@@ -769,11 +832,16 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
             states,
         } = event
         {
-            app.configure_size = Some((width, height));
-            app.configure_states = states
+            let states: Vec<u32> = states
                 .chunks_exact(4)
                 .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
+            let id = toplevel.id().protocol_id();
+            app.toplevel_states.insert(id, states.clone());
+            if app.main_toplevel.is_none_or(|main| main == id) {
+                app.configure_size = Some((width, height));
+                app.configure_states = states;
+            }
         } else if let xdg_toplevel::Event::Close = event {
             app.close_requests += 1;
         } else if let xdg_toplevel::Event::WmCapabilities { capabilities } = event {
@@ -785,6 +853,13 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for App {
             app.wm_capabilities = Some(caps);
         }
     }
+}
+
+/// A dialog: a second toplevel of the client, its parent the main one.
+pub struct Dialog {
+    pub surface: wl_surface::WlSurface,
+    xdg: xdg_surface::XdgSurface,
+    pub toplevel: xdg_toplevel::XdgToplevel,
 }
 
 /// A dma-buf buffer, identified by its index.

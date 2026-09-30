@@ -79,6 +79,10 @@ Early development. Working today:
   inside it as their positioner allows. A popup that grabs keeps input on
   its client until a press lands outside it; popups also close when their
   view loses keyboard focus or leaves the scene.
+- Dialogs (toplevels with a parent: About, file choosers, message boxes)
+  show in their parent's view, centered over it and above it. The topmost
+  window has the keyboard and is the activated one, and a dialog never binds
+  a view of its own.
 - Scale follows the view's device pixel ratio (the widget passes it at
   creation). The toplevel is configured in logical pixels, and every surface
   is told the ratio through `wp_fractional_scale_v1`, rounded up through

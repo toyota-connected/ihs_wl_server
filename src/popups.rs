@@ -46,18 +46,19 @@ pub fn toplevel_of(popups: &PopupManager, surface: &WlSurface) -> WlSurface {
 impl State {
     /// The scene of view @p view_id, bottom to top; empty while unbound.
     pub fn view_trees(&self, view_id: i32) -> Vec<Tree> {
-        let Some(root) = self.view_root(view_id) else {
-            return Vec::new();
-        };
-        // The toplevel's window geometry starts at the view's origin.
-        let origin = crate::tree::geometry_origin(&root);
-        let mut trees = vec![(root.clone(), (-origin.x, -origin.y).into())];
-        // Children come before their parents here.
-        let mut popups: Vec<Tree> = PopupManager::popups_for_surface(&root)
-            .map(|(popup, at)| (popup.wl_surface().clone(), at - popup.geometry().loc))
-            .collect();
-        popups.reverse();
-        trees.extend(popups);
+        let mut trees = Vec::new();
+        // Each window (the toplevel, then its dialogs), its window geometry
+        // where view_windows put it, then its popups above it.
+        for (window, at) in self.view_windows(view_id) {
+            let origin = crate::tree::geometry_origin(&window);
+            trees.push((window.clone(), at - origin));
+            // Children come before their parents here.
+            let mut popups: Vec<Tree> = PopupManager::popups_for_surface(&window)
+                .map(|(popup, p)| (popup.wl_surface().clone(), at + p - popup.geometry().loc))
+                .collect();
+            popups.reverse();
+            trees.extend(popups);
+        }
         trees
     }
 
@@ -87,18 +88,22 @@ impl State {
         let Ok(root) = find_popup_root_surface(&kind) else {
             return;
         };
-        // In the parent's window geometry space, as the positioner is.
-        // Worked out first: it reads the popup's state, which the closure
-        // below holds locked.
-        let target = self
-            .bound_view_of(&root)
-            .and_then(|v| self.view_logical_size(v))
-            .map(|(w, h)| {
-                Rectangle::new(
-                    Point::from((0, 0)) - get_popup_toplevel_coords(&kind),
-                    (w, h).into(),
-                )
-            });
+        // In the parent's window geometry space, as the positioner is; the
+        // window is a dialog somewhere in the view, or its toplevel at the
+        // origin. Worked out first: it reads the popup's state, which the
+        // closure below holds locked.
+        let target = self.bound_view_of(&root).and_then(|v| {
+            let (w, h) = self.view_logical_size(v)?;
+            let at = self
+                .view_windows(v)
+                .into_iter()
+                .find(|(window, _)| *window == root)
+                .map_or(Point::from((0, 0)), |(_, at)| at);
+            Some(Rectangle::new(
+                Point::from((0, 0)) - at - get_popup_toplevel_coords(&kind),
+                (w, h).into(),
+            ))
+        });
         popup.with_pending_state(|state| {
             state.geometry = match target {
                 Some(target) => state.positioner.get_unconstrained_geometry(target),
@@ -137,20 +142,20 @@ impl State {
         pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
     }
 
-    /// Dismiss every popup of view @p view_id.
+    /// Dismiss every popup of view @p view_id, its dialogs' included.
     pub fn dismiss_popups(&mut self, view_id: i32) {
-        let Some(root) = self.view_root(view_id) else {
-            return;
-        };
-        let popups: Vec<PopupKind> = PopupManager::popups_for_surface(&root)
-            .map(|(p, _)| p)
-            .collect();
-        if popups.is_empty() {
-            return;
+        let mut dismissed = false;
+        for (window, _) in self.view_windows(view_id) {
+            let popups: Vec<PopupKind> = PopupManager::popups_for_surface(&window)
+                .map(|(p, _)| p)
+                .collect();
+            for popup in &popups {
+                let _ = PopupManager::dismiss_popup(&window, popup);
+                dismissed = true;
+            }
         }
-        for popup in &popups {
-            let _ = PopupManager::dismiss_popup(&root, popup);
+        if dismissed {
+            self.popups.cleanup();
         }
-        self.popups.cleanup();
     }
 }
