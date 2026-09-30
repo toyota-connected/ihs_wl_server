@@ -62,8 +62,10 @@ Early development. Working today:
   feedback carries the display's time, refresh, counter and flags (including
   zero-copy). A fifo barrier clears once the update that set it is shown. A
   commit with a target time is applied one refresh ahead of the first vblank
-  at or after it. For views off screen, a clock at the display's refresh
-  stands in for the reports.
+  at or after it. For views off screen, a clock stands in for the reports:
+  what waits clears at the next refresh, then about once a second, so a
+  fifo client that ignores `suspended` makes progress without rendering at
+  the display's rate. Commit-timing targets are still honored.
 - A toplevel is `activated` only while its view has keyboard focus and is
   in the scene. When the view leaves the scene (scrolled off, occluded, its
   display gone), the toplevel is `suspended` (xdg-shell v6) so the client

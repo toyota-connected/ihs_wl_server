@@ -141,6 +141,9 @@ pub struct ViewEntry {
     pub frames: Frames,
     /// Out of the scene: nothing it shows is reported.
     pub suspended: bool,
+    /// While suspended, when its barriers may next be released (see
+    /// pacing.rs, HIDDEN_RELEASE_NS).
+    pub hidden_release_ns: u64,
     /// The size the client is asked for instead of the view's, in logical
     /// pixels; its content is then scaled to fit the view.
     pub requested: Option<(i32, i32)>,
@@ -349,6 +352,7 @@ impl State {
                         cleared: false,
                         frames: Frames::default(),
                         suspended: false,
+                        hidden_release_ns: 0,
                         requested,
                     },
                 );

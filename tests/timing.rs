@@ -146,8 +146,10 @@ fn fifo_waits_for_the_frame_that_set_the_barrier() {
     mock_host::dispose_view(22);
 }
 
-/// Off screen nothing is reported, so the barrier clears on the clock
-/// instead: the client keeps going, at about the display's pace.
+/// Off screen nothing is reported, so barriers clear on the clock instead:
+/// what waits at once, at the next refresh, then about once a second -- a
+/// hidden fifo client keeps making progress without rendering at the
+/// display's rate.
 #[test]
 fn fifo_barriers_clear_on_the_clock_off_screen() {
     let _serial = serial();
@@ -160,19 +162,36 @@ fn fifo_barriers_clear_on_the_clock_off_screen() {
     h.wait_submissions(23, 1);
     mock_host::set_suspended(23, true);
 
+    // A frame that sets a barrier, then two that wait on the one before.
     let start = Instant::now();
-    for i in 0..5 {
+    for i in 0..3 {
         h.client.fifo_wait_barrier();
         h.client.fifo_set_barrier();
         h.client
             .commit_buffer(if i % 2 == 0 { b } else { a }, false);
     }
-    h.wait_submissions(23, 6);
-    let took = start.elapsed();
+    // The first wait clears at the next refresh.
+    h.wait_submissions(23, 3);
+    let first = start.elapsed();
     assert!(
-        took < Duration::from_secs(1),
-        "barriers held for {took:?} off screen"
+        first < Duration::from_millis(500),
+        "first barrier held for {first:?} off screen"
     );
+    // The second only a second after it.
+    h.wait_submissions(23, 4);
+    let second = start.elapsed();
+    assert!(
+        second >= Duration::from_millis(900) && second < Duration::from_millis(2500),
+        "second barrier off screen cleared after {second:?}"
+    );
+
+    // Back on screen, the display's pace again: a report clears it.
+    mock_host::set_suspended(23, false);
+    h.client.fifo_wait_barrier();
+    h.client.commit_buffer(b, false);
+    let seq = Harness::submissions(23).last().unwrap().seq;
+    mock_host::present(23, seq);
+    h.wait_submissions(23, 5);
     mock_host::dispose_view(23);
 }
 

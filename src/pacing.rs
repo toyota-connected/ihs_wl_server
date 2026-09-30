@@ -17,6 +17,12 @@ use smithay::wayland::compositor::{self, Barrier, CompositorHandler};
 use crate::state::State;
 use crate::timing::{self, now_ns, Report, Taken};
 
+/// How often a suspended view's barriers are released: a fifo client that
+/// does not stop for xdg_toplevel.suspended still makes progress, at a pace
+/// that costs next to nothing, rather than rendering hidden at the display
+/// rate.
+pub(crate) const HIDDEN_RELEASE_NS: u64 = 1_000_000_000;
+
 /// Fifo barriers of updates no view shows held for the clock, at most. A
 /// client committing faster than that between two ticks gets the oldest
 /// cleared early.
@@ -120,12 +126,16 @@ impl State {
     }
 
     /// The view left (@p suspended) or re-entered the scene. Off screen,
-    /// nothing will be reported: its barriers clear on the clock.
+    /// nothing will be reported: its barriers clear on the clock, at the
+    /// next refresh and then at most every HIDDEN_RELEASE_NS.
     pub fn view_suspended(&mut self, view_id: i32, suspended: bool) {
         let Some(entry) = self.views.get_mut(&view_id) else {
             return;
         };
         entry.suspended = suspended;
+        // What waits now goes at the next refresh, so the client is not
+        // caught mid-frame; after that, at HIDDEN_RELEASE_NS.
+        entry.hidden_release_ns = self.clock.next_vblank(now_ns());
         if suspended {
             self.dismiss_popups(view_id);
         }
@@ -134,7 +144,8 @@ impl State {
         };
         if suspended {
             if entry.frames.next_stale(false).is_some() {
-                self.schedule_tick(self.clock.next_vblank(now_ns()));
+                let at = entry.hidden_release_ns;
+                self.schedule_tick(at);
             }
         } else if let Some(at) = entry.frames.next_stale(true) {
             // Back on screen: the shell has as long to report what it holds
@@ -150,10 +161,11 @@ impl State {
             return;
         };
         let at = if entry.suspended {
-            entry
-                .frames
-                .next_stale(false)
-                .map(|_| self.clock.next_vblank(now_ns()))
+            entry.frames.next_stale(false).map(|_| {
+                entry
+                    .hidden_release_ns
+                    .max(self.clock.next_vblank(now_ns()))
+            })
         } else {
             entry.frames.next_stale(true)
         };
@@ -285,7 +297,12 @@ impl State {
         let mut released_views = Vec::new();
         for (&view_id, entry) in self.views.iter_mut() {
             let released = if entry.suspended {
-                entry.frames.release_all()
+                if entry.hidden_release_ns <= now && entry.frames.next_stale(false).is_some() {
+                    entry.hidden_release_ns = now + HIDDEN_RELEASE_NS;
+                    entry.frames.release_all()
+                } else {
+                    false
+                }
             } else {
                 if entry.frames.flush_older(stale_before) && !flush.contains(&view_id) {
                     tracing::debug!(view_id, "frame unreported; sending its frame callbacks");
@@ -297,7 +314,11 @@ impl State {
                 released_views.push(view_id);
             }
             if let Some(at) = entry.frames.next_stale(!entry.suspended) {
-                wake(if entry.suspended { vblank } else { at });
+                wake(if entry.suspended {
+                    entry.hidden_release_ns.max(vblank)
+                } else {
+                    at
+                });
             }
         }
         for view_id in flush {
