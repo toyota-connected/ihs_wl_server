@@ -116,6 +116,54 @@ class IhsWlBindings {
   late final _ihs_wl_focus = _ihs_wl_focusPtr
       .asFunction<int Function(int, int)>();
 
+  int ihs_wl_view_close(int view_id) {
+    return _ihs_wl_view_close(view_id);
+  }
+
+  late final _ihs_wl_view_closePtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function(ffi.Int32)>>(
+        'ihs_wl_view_close',
+      );
+  late final _ihs_wl_view_close = _ihs_wl_view_closePtr
+      .asFunction<int Function(int)>();
+
+  int ihs_wl_set_event_port(
+    ffi.Pointer<
+      ffi.NativeFunction<
+        ffi.Bool Function(ffi.Int64 port, ffi.Pointer<ffi.Void> message)
+      >
+    >
+    post,
+    int port,
+  ) {
+    return _ihs_wl_set_event_port(post, port);
+  }
+
+  late final _ihs_wl_set_event_portPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<
+              ffi.NativeFunction<
+                ffi.Bool Function(ffi.Int64 port, ffi.Pointer<ffi.Void> message)
+              >
+            >,
+            ffi.Int64,
+          )
+        >
+      >('ihs_wl_set_event_port');
+  late final _ihs_wl_set_event_port = _ihs_wl_set_event_portPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<
+            ffi.NativeFunction<
+              ffi.Bool Function(ffi.Int64 port, ffi.Pointer<ffi.Void> message)
+            >
+          >,
+          int,
+        )
+      >();
+
   int ihs_wl_view_size(int view_id, double width, double height) {
     return _ihs_wl_view_size(view_id, width, height);
   }
@@ -202,6 +250,30 @@ enum IhsWlTouchKind {
     3 => IHS_WL_TOUCH_KIND_CANCEL,
     4 => IHS_WL_TOUCH_KIND_FRAME,
     _ => throw ArgumentError('Unknown value for IhsWlTouchKind: $value'),
+  };
+}
+
+enum IhsWlViewEvent {
+  IHS_WL_VIEW_EVENT_BOUND(1),
+  IHS_WL_VIEW_EVENT_CLOSED(2),
+  IHS_WL_VIEW_EVENT_MAXIMIZE_REQUESTED(3),
+  IHS_WL_VIEW_EVENT_UNMAXIMIZE_REQUESTED(4),
+  IHS_WL_VIEW_EVENT_MINIMIZE_REQUESTED(5),
+  IHS_WL_VIEW_EVENT_FULLSCREEN_REQUESTED(6),
+  IHS_WL_VIEW_EVENT_UNFULLSCREEN_REQUESTED(7);
+
+  final int value;
+  const IhsWlViewEvent(this.value);
+
+  static IhsWlViewEvent fromValue(int value) => switch (value) {
+    1 => IHS_WL_VIEW_EVENT_BOUND,
+    2 => IHS_WL_VIEW_EVENT_CLOSED,
+    3 => IHS_WL_VIEW_EVENT_MAXIMIZE_REQUESTED,
+    4 => IHS_WL_VIEW_EVENT_UNMAXIMIZE_REQUESTED,
+    5 => IHS_WL_VIEW_EVENT_MINIMIZE_REQUESTED,
+    6 => IHS_WL_VIEW_EVENT_FULLSCREEN_REQUESTED,
+    7 => IHS_WL_VIEW_EVENT_UNFULLSCREEN_REQUESTED,
+    _ => throw ArgumentError('Unknown value for IhsWlViewEvent: $value'),
   };
 }
 

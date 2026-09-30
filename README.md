@@ -236,6 +236,31 @@ change. `WaylandToplevelView(requestedSize: Size(800, 600))` asks the client
 for that size instead; its content is scaled to fit the view, aspect kept,
 centered, and input is mapped back (`ihs_wl_view_size` in the C ABI).
 
+A `WaylandToplevelController` reports what happens to the toplevel a view
+shows and closes it:
+
+```dart
+final controller = WaylandToplevelController(
+  onWindowRequest: (request) {
+    // maximize, unmaximize, minimize, fullscreen, unfullscreen: the
+    // client's own buttons. The toplevel stays the view's size; resize or
+    // hide the view as the app sees fit.
+  },
+);
+controller.addListener(() {
+  if (!controller.isBound) {
+    // The client closed its window, or quit.
+  }
+});
+
+WaylandToplevelView(activationToken: token, controller: controller);
+
+controller.close(); // xdg_toplevel.close; the client may ask its user first
+```
+
+Events reach Dart over a native port (`ihs_wl_set_event_port`), which a hot
+restart re-registers; `ihs_wl_view_close` asks the client to close.
+
 `WaylandServer.start` is idempotent. After a hot restart the server is still
 running. Its clients carry on, and the re-created views bind to their
 toplevels again.

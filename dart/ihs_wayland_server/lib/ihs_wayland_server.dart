@@ -6,4 +6,5 @@
 library;
 
 export 'src/server.dart' show WaylandServer, WaylandServerException;
-export 'src/view.dart' show WaylandToplevelView;
+export 'src/view.dart'
+    show WaylandToplevelController, WaylandToplevelView, WaylandWindowRequest;

@@ -240,4 +240,7 @@ class WaylandInput {
   /// view's own; null goes back to the view's.
   void requestSize(int viewId, Size? size) =>
       _lib.ihs_wl_view_size(viewId, size?.width ?? 0.0, size?.height ?? 0.0);
+
+  /// Ask the client of the view's toplevel to close it.
+  void closeView(int viewId) => _lib.ihs_wl_view_close(viewId);
 }
