@@ -13,9 +13,10 @@
 //   LAUNCH=gnome-calculator homescreen ...
 //
 // The bar above the client shows whether one is shown, scales it to a fixed
-// 800x600 (requestedSize), and closes it. The client's own maximize and
-// fullscreen buttons hide the bar, and restoring brings it back; its minimize
-// button takes the view off screen (the client is suspended) until Restore.
+// 800x600 (requestedSize), and closes it. The client's maximize and
+// fullscreen requests are granted and hide the bar, and restoring brings it
+// back; its minimize button takes the view off screen (the client is
+// suspended) until Restore.
 
 import 'dart:io';
 
@@ -83,19 +84,27 @@ class _ClientPageState extends State<ClientPage> {
     super.dispose();
   }
 
+  /// Grant what the client asks for, and fill the window while it is
+  /// maximized or fullscreen.
   void _onWindowRequest(WaylandWindowRequest request) {
-    setState(() {
-      switch (request) {
-        case WaylandWindowRequest.maximize:
-        case WaylandWindowRequest.fullscreen:
-          _filled = true;
-        case WaylandWindowRequest.unmaximize:
-        case WaylandWindowRequest.unfullscreen:
-          _filled = false;
-        case WaylandWindowRequest.minimize:
-          _minimized = true;
-      }
-    });
+    final Set<WaylandWindowState> state = <WaylandWindowState>{
+      ..._controller.windowState,
+    };
+    switch (request) {
+      case WaylandWindowRequest.maximize:
+        state.add(WaylandWindowState.maximized);
+      case WaylandWindowRequest.unmaximize:
+        state.remove(WaylandWindowState.maximized);
+      case WaylandWindowRequest.fullscreen:
+        state.add(WaylandWindowState.fullscreen);
+      case WaylandWindowRequest.unfullscreen:
+        state.remove(WaylandWindowState.fullscreen);
+      case WaylandWindowRequest.minimize:
+        setState(() => _minimized = true);
+        return;
+    }
+    _controller.windowState = state;
+    setState(() => _filled = state.isNotEmpty);
   }
 
   @override
