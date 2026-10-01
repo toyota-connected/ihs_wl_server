@@ -137,7 +137,7 @@ fn prepare(spec: &LayerSpec, buffer_id: u32) -> Option<Prepared> {
             height: image.height,
             buffer_id,
             external_oes: image.external as u8,
-            reserved: [0; 3],
+            ..Default::default()
         })),
     }
 }
@@ -155,8 +155,8 @@ fn frame_for(dmabuf: &Dmabuf, buffer_id: u32) -> Option<sys::IhsFrame> {
         struct_size: std::mem::size_of::<sys::IhsFrame>(),
         format: sys::IhsFormatModifier {
             fourcc: format.code as u32,
-            reserved: 0,
             modifier: u64::from(format.modifier),
+            ..Default::default()
         },
         width,
         height,
@@ -264,9 +264,8 @@ fn layer_for(spec: &LayerSpec, prepared: &Prepared, fit: Fit, dpr: f64) -> sys::
         dst_h: clamp_u(physical(y1, dpr) - physical(y0, dpr)),
         transform: spec.transform,
         opaque: spec.opaque as u8,
-        content_type: 0,
-        reserved: [0; 2],
         image,
+        ..Default::default()
     }
 }
 

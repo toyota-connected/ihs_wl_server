@@ -87,7 +87,9 @@ fn requirements() -> sys::IhsPvRequirements {
         needs_alpha: 1,
         sync: sys::IHS_PV_SYNC_EXPLICIT_PREFERRED as u8,
         z_order: sys::IHS_PV_Z_INLINE as u8,
-        reserved: 0,
+        // Reserved bytes stay zero, which a later minor that names one reads as
+        // its old behavior (1.17's preferred_kind: no preference).
+        ..Default::default()
     }
 }
 
