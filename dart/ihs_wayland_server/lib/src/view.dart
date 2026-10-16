@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
@@ -32,6 +34,11 @@ const String _viewType = 'ihs_wl/toplevel';
 /// it through every layout change. With a [requestedSize] it is asked for
 /// that size instead, and its content is scaled to fit the view, aspect
 /// kept, centered.
+///
+/// A view an ancestor draws scaled (a [FittedBox], a [Transform.scale]) is
+/// sized, and takes input, as it is on screen: the shell draws the client's
+/// buffers into the view's rect on screen, so the client renders at 1:1
+/// there rather than at the size of the app's layout.
 ///
 /// A [controller] reports whether a toplevel is shown and the window-state
 /// changes its client asks for, and asks the client to close.
@@ -86,6 +93,9 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
 
   /// A toplevel is shown.
   bool _bound = false;
+
+  /// The device pixel ratio the view was last built at.
+  double _dpr = 1.0;
 
   @override
   void dispose() {
@@ -211,6 +221,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
       'requestedSize must be finite and positive: $requested',
     );
     final double dpr = MediaQuery.devicePixelRatioOf(context);
+    _dpr = dpr;
     return Focus(
       focusNode: _focus,
       autofocus: widget.autofocus,
@@ -239,9 +250,11 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                         // The shell learns a new size only from a resize
                         // call; PlatformViewLink creates at the first size
                         // and never reports another.
+                        final _ToplevelViewController view =
+                            controller as _ToplevelViewController;
                         return _LayoutListener(
-                          onLayout:
-                              (controller as _ToplevelViewController).laidOut,
+                          onLayout: view.laidOut,
+                          onPaint: (double scale) => view.drawnAt(scale / _dpr),
                           child: PlatformViewSurface(
                             controller: controller,
                             gestureRecognizers:
@@ -339,17 +352,44 @@ class _ToplevelViewController extends PlatformViewController {
   Future<void> create({Size? size, Offset? position}) =>
       _creation ??= _createOnce(size);
 
-  /// The size the shell was last given, at create or resize.
+  /// The size the shell was last given, at create or resize: the view's on
+  /// screen.
   Size? _sentSize;
 
   /// The size the view was last laid out at.
   Size? _laidOut;
 
+  /// Logical pixels on screen per logical pixel of the view's layout: not 1
+  /// where an ancestor draws it scaled.
+  double _scale = 1.0;
+
+  /// @p size, laid out, as it is on screen.
+  Size _onScreen(Size size) => size * _scale;
+
   /// The view was laid out at @p size: tell the shell if it has another.
   void laidOut(Size size) {
     _laidOut = size;
-    if (_created && size != _sentSize) {
-      _resize(size);
+    _sendSize();
+  }
+
+  /// The view was drawn @p scale times its layout size on screen. Called
+  /// from paint; the calls it makes change no widget state.
+  void drawnAt(double scale) {
+    if ((scale - _scale).abs() < 1e-3) {
+      return;
+    }
+    _scale = scale;
+    // The shell draws the client's buffers into the view's rect on screen,
+    // and the server places them in the size it was given: give it that
+    // rect's, and input to match.
+    waylandInput?.setViewScale(id, scale);
+    _sendSize();
+  }
+
+  void _sendSize() {
+    final Size? laidOut = _laidOut;
+    if (_created && laidOut != null && _onScreen(laidOut) != _sentSize) {
+      _resize(_onScreen(laidOut));
     }
   }
 
@@ -361,7 +401,8 @@ class _ToplevelViewController extends PlatformViewController {
     );
   }
 
-  Future<void> _createOnce(Size? size) async {
+  Future<void> _createOnce(Size? laidOut) async {
+    final Size? size = laidOut == null ? null : _onScreen(laidOut);
     _sentSize = size;
     final ByteData? params = const StandardMessageCodec().encodeMessage(
       creationParams,
@@ -380,12 +421,13 @@ class _ToplevelViewController extends PlatformViewController {
             ),
         });
     _created = true;
-    onCreated(id);
-    // Laid out again while the create was in flight.
-    final Size? laidOut = _laidOut;
-    if (laidOut != null && laidOut != _sentSize) {
-      _resize(laidOut);
+    if (_scale != 1.0) {
+      waylandInput?.setViewScale(id, _scale);
     }
+    onCreated(id);
+    // Laid out again, or drawn at another scale, while the create was in
+    // flight.
+    _sendSize();
   }
 
   // Straight to the module over FFI: no platform channel, no platform
@@ -405,6 +447,7 @@ class _ToplevelViewController extends PlatformViewController {
     if (!_created) {
       return;
     }
+    waylandInput?.setViewScale(id, 1.0);
     await SystemChannels.platform_views.invokeMethod<void>(
       'dispose',
       <String, Object>{'id': id},
@@ -412,29 +455,40 @@ class _ToplevelViewController extends PlatformViewController {
   }
 }
 
-/// Reports its size after every layout that changes it.
+/// Reports its size after every layout that changes it, and the scale it is
+/// drawn at on screen after every paint.
 class _LayoutListener extends SingleChildRenderObjectWidget {
-  const _LayoutListener({required this.onLayout, required super.child});
+  const _LayoutListener({
+    required this.onLayout,
+    required this.onPaint,
+    required super.child,
+  });
 
   final ValueChanged<Size> onLayout;
 
+  /// Physical pixels on screen per logical pixel of its layout, as painted.
+  final ValueChanged<double> onPaint;
+
   @override
   _RenderLayoutListener createRenderObject(BuildContext context) =>
-      _RenderLayoutListener(onLayout);
+      _RenderLayoutListener(onLayout, onPaint);
 
   @override
   void updateRenderObject(
     BuildContext context,
     _RenderLayoutListener renderObject,
   ) {
-    renderObject.onLayout = onLayout;
+    renderObject
+      ..onLayout = onLayout
+      ..onPaint = onPaint;
   }
 }
 
 class _RenderLayoutListener extends RenderProxyBox {
-  _RenderLayoutListener(this.onLayout);
+  _RenderLayoutListener(this.onLayout, this.onPaint);
 
   ValueChanged<Size> onLayout;
+  ValueChanged<double> onPaint;
   Size? _last;
 
   @override
@@ -444,5 +498,19 @@ class _RenderLayoutListener extends RenderProxyBox {
       _last = size;
       onLayout(size);
     }
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    // Only final at paint: a FittedBox sets its scale after laying out its
+    // child. To the screen, in physical pixels: the root applies the device
+    // pixel ratio, and the ancestors (a FittedBox, a Transform.scale) the
+    // rest.
+    final Matrix4 m = getTransformTo(null);
+    // The length of the x unit vector: the scale, rotation aside.
+    final double x = m.entry(0, 0);
+    final double y = m.entry(1, 0);
+    onPaint(math.sqrt(x * x + y * y));
   }
 }
