@@ -100,6 +100,27 @@ class WaylandServer {
     return out.cast<Utf8>().toDartString(length: rc);
   });
 
+  /// Make this server the Wayland display of the app's own process
+  /// (`WAYLAND_DISPLAY`). This is only needed if the app itself is a Wayland client.
+  void exportDisplay() {
+    final String? socket = socketName;
+    if (socket == null) {
+      return;
+    }
+    final int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, int) setenv =
+        ffi.DynamicLibrary.process().lookupFunction<
+          ffi.Int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Int),
+          int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, int)
+        >('setenv');
+    using((Arena arena) {
+      setenv(
+        'WAYLAND_DISPLAY'.toNativeUtf8(allocator: arena),
+        socket.toNativeUtf8(allocator: arena),
+        1,
+      );
+    });
+  }
+
   /// Start a client on this server with a new activation token, which a
   /// `WaylandToplevelView` names to show it. [environment] is added to the
   /// client's; `WAYLAND_DISPLAY` and `XDG_ACTIVATION_TOKEN` are set here.
