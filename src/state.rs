@@ -15,7 +15,7 @@ use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{DisplayHandle, Weak};
+use smithay::reexports::wayland_server::{DisplayHandle, Resource, Weak};
 use smithay::wayland::commit_timing::CommitTimingManagerState;
 use smithay::wayland::compositor::{self, CompositorClientState, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
@@ -457,6 +457,9 @@ impl State {
             Cmd::IssueToken(reply) => {
                 let _ = reply.send(self.issue_activation_token());
             }
+            Cmd::ViewClient { view_id, reply } => {
+                let _ = reply.send(self.view_client_info(view_id));
+            }
         }
     }
 
@@ -464,7 +467,10 @@ impl State {
     /// binds the toplevel activated with it, and waits for it. Otherwise
     /// the oldest mapped, unbound one with the view's app_id, or with any
     /// app_id when the view names none -- passing over toplevels activated
-    /// with a token, which are for the views naming theirs.
+    /// with a token, which are for the views naming theirs. A sandboxed
+    /// client matches an app_id only when it is its sandbox's. A view naming
+    /// a sandbox app_id binds only toplevels of clients in that sandbox,
+    /// which the client cannot claim for itself.
     pub fn try_bind_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
@@ -475,17 +481,30 @@ impl State {
         let params = &entry.handle.params;
         let token = params.token.clone();
         let want = params.app_id.clone();
+        let sandbox = params.sandbox_app_id.clone();
         let found = self.toplevels.by_id.iter().find_map(|(id, t)| {
             // A dialog is shown with its parent, never on its own.
             if !t.mapped || t.view.is_some() || t.surface.parent().is_some() {
                 return None;
+            }
+            if let Some(sandbox) = &sandbox {
+                let context = security_context_of(t.surface.wl_surface());
+                if context.and_then(|c| c.app_id).as_ref() != Some(sandbox) {
+                    return None;
+                }
             }
             if token.is_some() || t.token.is_some() {
                 return (t.token == token).then_some(*id);
             }
             match &want {
                 Some(app_id) => {
-                    (app_id_and_title(t.surface.wl_surface()).0 == *app_id).then_some(*id)
+                    let surface = t.surface.wl_surface();
+                    let claimed = app_id_and_title(surface).0;
+                    // A sandboxed client's app_id counts only when it is its
+                    // sandbox's: it may not pass for another app.
+                    let own = security_context_of(surface)
+                        .is_none_or(|c| c.app_id.as_deref() == Some(claimed.as_str()));
+                    (own && claimed == *app_id).then_some(*id)
                 }
                 None => Some(*id),
             }
@@ -509,6 +528,24 @@ impl State {
         // Show what the toplevel already has; a static client may never
         // commit again.
         self.submit_view(view_id);
+    }
+
+    /// Who the client of the toplevel @p view_id shows is; None while it
+    /// shows none.
+    fn view_client_info(&self, view_id: i32) -> Option<crate::ClientInfo> {
+        let toplevel = self.views.get(&view_id)?.toplevel?;
+        let surface = self.toplevels.by_id.get(&toplevel)?.surface.wl_surface();
+        let credentials = surface.client()?.get_credentials(&self.dh).ok()?;
+        Some(crate::ClientInfo {
+            pid: credentials.pid,
+            uid: credentials.uid,
+            gid: credentials.gid,
+            sandbox: security_context_of(surface).map(|c| crate::Sandbox {
+                engine: c.sandbox_engine,
+                app_id: c.app_id,
+                instance_id: c.instance_id,
+            }),
+        })
     }
 
     /// A toplevel mapped: views waiting for one may bind it, oldest first.
@@ -782,6 +819,15 @@ fn set_state(
     } else {
         states.unset(state);
     }
+}
+
+/// The sandbox the client of @p surface connected through, if any.
+pub fn security_context_of(surface: &WlSurface) -> Option<SecurityContext> {
+    surface
+        .client()?
+        .get_data::<ClientState>()?
+        .security_context
+        .clone()
 }
 
 pub fn app_id_and_title(surface: &WlSurface) -> (String, String) {

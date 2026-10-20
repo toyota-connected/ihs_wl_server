@@ -13,6 +13,9 @@ pub enum Observed {
     ToplevelMapped {
         app_id: String,
         title: String,
+        /// The client's sandbox engine and app_id, when it connected
+        /// through a security context.
+        sandbox: Option<(Option<String>, Option<String>)>,
     },
     ToplevelUnmapped {
         app_id: String,

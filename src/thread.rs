@@ -86,6 +86,11 @@ pub enum Cmd {
     },
     /// Issue an activation token, sent back on the channel.
     IssueToken(std::sync::mpsc::SyncSender<String>),
+    /// The client of the toplevel the view shows, sent back on the channel.
+    ViewClient {
+        view_id: i32,
+        reply: std::sync::mpsc::SyncSender<Option<crate::ClientInfo>>,
+    },
     /// The shell's scanout hint for a layer of the view (display thread).
     ScanoutHint {
         view_id: i32,

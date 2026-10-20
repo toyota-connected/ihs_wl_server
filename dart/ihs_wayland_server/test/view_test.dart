@@ -39,7 +39,9 @@ void main() {
     expect(focus.hasFocus, isFalse);
   });
 
-  testWidgets('a requested size reaches the view', (WidgetTester tester) async {
+  testWidgets('a requested size and sandbox app id reach the view', (
+    WidgetTester tester,
+  ) async {
     Map<Object?, Object?>? params;
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform_views,
@@ -60,12 +62,16 @@ void main() {
       WidgetsApp(
         color: const Color(0xff000000),
         builder: (BuildContext context, Widget? child) =>
-            const WaylandToplevelView(requestedSize: Size(800, 600)),
+            const WaylandToplevelView(
+              requestedSize: Size(800, 600),
+              sandboxAppId: 'org.example.App',
+            ),
       ),
     );
     await tester.pump();
     expect(params?['requested_width'], 800.0);
     expect(params?['requested_height'], 600.0);
+    expect(params?['sandbox_app_id'], 'org.example.App');
   });
 
   testWidgets('the controller follows the view events', (

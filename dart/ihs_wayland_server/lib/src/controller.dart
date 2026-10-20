@@ -49,7 +49,7 @@ enum WaylandWindowState {
 /// Notifies its listeners when [isBound] changes: true once a toplevel is
 /// shown, false again when the client closes it (after [close], its own
 /// close button, or quitting). The view then shows nothing until another
-/// matching toplevel maps.
+/// matching toplevel maps. [client] says who the client shown is.
 class WaylandToplevelController extends ChangeNotifier {
   WaylandToplevelController({
     this.onWindowRequest,
@@ -114,6 +114,13 @@ class WaylandToplevelController extends ChangeNotifier {
   /// Whether the view shows a toplevel.
   bool get isBound => _bound;
 
+  WaylandClient? _client;
+
+  /// Who the client of the toplevel shown is, as the server knows it --
+  /// including the sandbox it runs in, which the client cannot claim for
+  /// itself. Null while nothing is shown.
+  WaylandClient? get client => _client;
+
   /// Ask the client to close its toplevel (`xdg_toplevel.close`). The client
   /// decides: it may ask its user first (unsaved changes, say), or refuse.
   /// When it closes, [isBound] turns false. Does nothing while nothing is
@@ -129,12 +136,24 @@ class WaylandToplevelController extends ChangeNotifier {
   /// detached.
   void _attach(int? viewId, bool bound) {
     _viewId = viewId;
-    _setBound(bound);
+    _update(bound);
   }
 
   void _setBound(bool value) {
     if (_bound != value) {
-      _bound = value;
+      _update(value);
+    }
+  }
+
+  /// Whether a toplevel is shown, and then whose.
+  void _update(bool bound) {
+    final int? id = _viewId;
+    final WaylandClient? client = bound && id != null
+        ? waylandInput?.client(id)
+        : null;
+    if (bound != _bound || client != _client) {
+      _bound = bound;
+      _client = client;
       notifyListeners();
     }
   }
