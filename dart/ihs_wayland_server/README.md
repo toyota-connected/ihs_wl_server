@@ -62,7 +62,8 @@ GTK and Qt clients activate their toplevel with the token unprompted; show a
 client that ignores it by app_id instead. Without either, a view shows the
 oldest toplevel not shown elsewhere.
 
-A client sets its own app_id; a flatpak app cannot claim another's flatpak id.
+A client sets its own app_id; a flatpak app matches `appId` only when it is
+its own flatpak id.
 `WaylandToplevelView(sandboxAppId: 'org.gnome.Calculator')` binds only a
 toplevel of a client in that flatpak, and `WaylandToplevelController.client`
 says who the client shown is: pid, uid, gid and its sandbox, if any.

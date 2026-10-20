@@ -186,6 +186,65 @@ fn sandbox_identity() {
 }
 
 #[test]
+fn sandboxed_app_id_is_its_sandbox() {
+    const SOCKET: &str = "ihs-wl-test-sandbox-claim";
+    const SANDBOX: &str = "ihs-wl-test-sandbox-claim-app";
+    const OTHER: &str = "org.example.Other";
+    let _serial = serial();
+    let mut h = Harness::new(SOCKET);
+
+    // A sandboxed client claiming another app's app_id.
+    let _close = h
+        .client
+        .create_security_context(SANDBOX, "org.flatpak", APP, "1");
+    let mut sandboxed = Client::connect(SANDBOX);
+    sandboxed.create_toplevel(OTHER, "claimant");
+    let buf = sandboxed.new_dmabuf(64, 64);
+    sandboxed.commit_buffer(buf, false);
+    h.rec.wait_for(
+        "claimant mapped",
+        |e| matches!(e, Observed::ToplevelMapped { title, .. } if title == "claimant"),
+    );
+
+    // A view for that app_id passes it over, and binds the app's own
+    // toplevel once it maps.
+    assert_eq!(
+        mock_host::create_view_with_params(
+            "ihs_wl/toplevel",
+            1,
+            64.0,
+            64.0,
+            &params(&[("app_id", OTHER)])
+        ),
+        0
+    );
+    assert_eq!(ihs_wl_server::view_client(1).unwrap(), None);
+    h.client.create_toplevel(OTHER, "other");
+    let buf = h.client.new_dmabuf(64, 64);
+    h.client.commit_buffer(buf, false);
+    h.rec.wait_for("ViewBound 1", |e| {
+        matches!(e, Observed::ViewBound { view_id: 1, .. })
+    });
+    let client = ihs_wl_server::view_client(1)
+        .unwrap()
+        .expect("view 1 bound");
+    assert_eq!(client.sandbox, None);
+
+    // Its sandbox's app_id still binds it.
+    h.bind_with(2, &params(&[("sandbox_app_id", APP)]), 64.0, 64.0);
+    let client = ihs_wl_server::view_client(2)
+        .unwrap()
+        .expect("view 2 bound");
+    assert!(client.sandbox.is_some());
+
+    for view in 1..=2 {
+        mock_host::dispose_view(view);
+    }
+    drop(sandboxed);
+    let _ = std::fs::remove_file(path(SANDBOX));
+}
+
+#[test]
 fn oversized_identity_refused() {
     const SOCKET: &str = "ihs-wl-test-sandbox-oversized";
     const SANDBOX: &str = "ihs-wl-test-sandbox-oversized-app";

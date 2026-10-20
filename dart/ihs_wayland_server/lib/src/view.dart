@@ -29,10 +29,10 @@ const String _viewType = 'ihs_wl/toplevel';
 /// over toplevels launched with a token, which are for the views naming
 /// theirs. Until a matching client maps, the view is empty.
 ///
-/// With a [sandboxAppId], only a toplevel of a client in that sandbox
-/// matches, whichever way it is found: the app id a sandbox engine such as
-/// flatpak gave its socket (wp_security_context_v1), which the client cannot
-/// claim for itself, unlike its own [appId].
+/// A client sandboxed by an engine such as flatpak (wp_security_context_v1)
+/// matches [appId] only when it is its sandbox's app id. With a
+/// [sandboxAppId], only a toplevel of a client in that sandbox matches,
+/// whichever way it is found and whatever app id the client sets.
 ///
 /// The client is asked for the view's size as it is laid out, and follows
 /// it through every layout change. With a [requestedSize] it is asked for

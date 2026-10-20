@@ -467,9 +467,10 @@ impl State {
     /// binds the toplevel activated with it, and waits for it. Otherwise
     /// the oldest mapped, unbound one with the view's app_id, or with any
     /// app_id when the view names none -- passing over toplevels activated
-    /// with a token, which are for the views naming theirs. A view naming a
-    /// sandbox app_id binds only toplevels of clients in that sandbox, which
-    /// the client cannot claim for itself.
+    /// with a token, which are for the views naming theirs. A sandboxed
+    /// client matches an app_id only when it is its sandbox's. A view naming
+    /// a sandbox app_id binds only toplevels of clients in that sandbox,
+    /// which the client cannot claim for itself.
     pub fn try_bind_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
@@ -497,7 +498,13 @@ impl State {
             }
             match &want {
                 Some(app_id) => {
-                    (app_id_and_title(t.surface.wl_surface()).0 == *app_id).then_some(*id)
+                    let surface = t.surface.wl_surface();
+                    let claimed = app_id_and_title(surface).0;
+                    // A sandboxed client's app_id counts only when it is its
+                    // sandbox's: it may not pass for another app.
+                    let own = security_context_of(surface)
+                        .is_none_or(|c| c.app_id.as_deref() == Some(claimed.as_str()));
+                    (own && claimed == *app_id).then_some(*id)
                 }
                 None => Some(*id),
             }

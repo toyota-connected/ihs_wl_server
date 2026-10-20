@@ -229,11 +229,12 @@ view binds that toplevel. Views binding by app_id pass over toplevels launched
 with a token. A client that ignores `XDG_ACTIVATION_TOKEN` is never found by
 one; show it by app_id instead.
 
-A client sets its own app_id, so any client can claim any app's. A sandboxed
-one cannot claim its sandbox: flatpak (1.15.6 or newer) connects each app
-through a security context carrying its flatpak app id. Naming that id binds
-only a toplevel of a client in that sandbox, together with a token or app_id
-or on its own:
+A client sets its own app_id, so any client on the socket can claim any app's.
+A sandboxed one cannot: flatpak (1.15.6 or newer) connects each app through a
+security context carrying its flatpak app id, and a sandboxed client matches
+a view's app_id only when it is that id. Naming the sandbox app id binds only
+a toplevel of a client in that sandbox, whatever app_id it sets, together
+with a token or app_id or on its own:
 
 ```dart
 const WaylandToplevelView(sandboxAppId: 'org.gnome.Calculator');
