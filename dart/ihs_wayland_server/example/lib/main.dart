@@ -12,8 +12,14 @@
 //
 //   LAUNCH=gnome-calculator homescreen ...
 //
-// The bar above the client shows whether one is shown, scales it to a fixed
-// 800x600 (requestedSize), and closes it. The client's maximize and
+// With SANDBOX_APP_ID in the shell's environment, shows only a client in that
+// sandbox, such as a flatpak:
+//
+//   SANDBOX_APP_ID=org.gnome.Calculator homescreen ...
+//   flatpak run org.gnome.Calculator
+//
+// The bar above the client shows whether one is shown and who it is, scales it
+// to a fixed 800x600 (requestedSize), and closes it. The client's maximize and
 // fullscreen requests are granted and hide the bar, and restoring brings it
 // back; its minimize button takes the view off screen (the client is
 // suspended) until Restore.
@@ -24,6 +30,8 @@ import 'package:flutter/material.dart';
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
 
 const String _appId = String.fromEnvironment('APP_ID');
+
+final String _sandboxAppId = Platform.environment['SANDBOX_APP_ID'] ?? '';
 
 /// The size the Scale button asks the client for.
 const Size _fixedSize = Size(800, 600);
@@ -79,6 +87,14 @@ class _ClientPageState extends State<ClientPage> {
   bool _scaled = false;
 
   @override
+  void initState() {
+    super.initState();
+    _controller.addListener(
+      () => debugPrint('client: ${_describe(_controller.client)}'),
+    );
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
@@ -112,6 +128,7 @@ class _ClientPageState extends State<ClientPage> {
     final Widget view = WaylandToplevelView(
       activationToken: widget.token,
       appId: _appId.isEmpty ? null : _appId,
+      sandboxAppId: _sandboxAppId.isEmpty ? null : _sandboxAppId,
       controller: _controller,
       requestedSize: _scaled ? _fixedSize : null,
     );
@@ -152,7 +169,7 @@ class _ClientPageState extends State<ClientPage> {
               Expanded(
                 child: Text(
                   'WAYLAND_DISPLAY=${widget.socketName}  '
-                  '${_controller.isBound ? 'client shown' : 'no client'}',
+                  '${_describe(_controller.client)}',
                 ),
               ),
               FilterChip(
@@ -174,4 +191,14 @@ class _ClientPageState extends State<ClientPage> {
       ),
     );
   }
+}
+
+/// Who [client] is, for the bar.
+String _describe(WaylandClient? client) {
+  if (client == null) {
+    return 'no client';
+  }
+  final WaylandSandbox? sandbox = client.sandbox;
+  return 'pid ${client.pid}'
+      '${sandbox == null ? '' : ' in ${sandbox.engine} ${sandbox.appId}'}';
 }
