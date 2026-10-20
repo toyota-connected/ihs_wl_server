@@ -28,7 +28,8 @@ Early development. Working today:
 - `wp_security_context_v1`: a sandbox engine (flatpak 1.15.6 or newer) makes
   a listener for one app, served until the engine closes it. Clients that
   connect through it carry the sandbox's engine, app id and instance id, and
-  do not see the manager.
+  do not see the manager. A view can require the sandbox's app id, and
+  `ihs_wl_view_client` reports who a view's client is.
 - A view binds to a toplevel by activation token or app_id and configures
   it to the view's size, or to a size the view requests, scaled to fit; a
   window the client makes larger than asked (a minimum size wider than the
@@ -227,6 +228,20 @@ activates its toplevel with the token (GTK and Qt do this unprompted), and the
 view binds that toplevel. Views binding by app_id pass over toplevels launched
 with a token. A client that ignores `XDG_ACTIVATION_TOKEN` is never found by
 one; show it by app_id instead.
+
+A client sets its own app_id, so any client can claim any app's. A sandboxed
+one cannot claim its sandbox: flatpak (1.15.6 or newer) connects each app
+through a security context carrying its flatpak app id. Naming that id binds
+only a toplevel of a client in that sandbox, together with a token or app_id
+or on its own:
+
+```dart
+const WaylandToplevelView(sandboxAppId: 'org.gnome.Calculator');
+```
+
+`WaylandToplevelController.client` says who the client shown is: its pid, uid
+and gid, and its sandbox's engine, app id and instance id
+(`ihs_wl_view_client` in the C ABI).
 
 The package's build hook builds the crate with cargo as part of the app's
 build and bundles the library, so there is nothing to build by hand. The

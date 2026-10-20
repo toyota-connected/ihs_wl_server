@@ -18,7 +18,7 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{delegate_compositor, delegate_shm, delegate_single_pixel_buffer};
 
 use crate::observe::{self, Observed};
-use crate::state::{app_id_and_title, ClientState, State, Toplevels};
+use crate::state::{app_id_and_title, security_context_of, ClientState, State, Toplevels};
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -175,8 +175,13 @@ impl State {
         if !entry.mapped {
             entry.mapped = true;
             let (app_id, title) = app_id_and_title(surface);
-            tracing::info!(id, app_id, title, "toplevel mapped");
-            observe::emit(Observed::ToplevelMapped { app_id, title });
+            let sandbox = security_context_of(surface).map(|c| (c.sandbox_engine, c.app_id));
+            tracing::info!(id, app_id, title, ?sandbox, "toplevel mapped");
+            observe::emit(Observed::ToplevelMapped {
+                app_id,
+                title,
+                sandbox,
+            });
             self.bind_waiting_views();
             // A dialog over a view takes the keyboard from its parent.
             self.refresh_keyboard_focus();

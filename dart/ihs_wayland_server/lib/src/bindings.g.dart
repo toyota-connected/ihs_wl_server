@@ -66,6 +66,19 @@ class IhsWlBindings {
   late final _ihs_wl_activation_token = _ihs_wl_activation_tokenPtr
       .asFunction<int Function(ffi.Pointer<ffi.Char>, int)>();
 
+  int ihs_wl_view_client(int view_id, ffi.Pointer<IhsWlClientInfo> info) {
+    return _ihs_wl_view_client(view_id, info);
+  }
+
+  late final _ihs_wl_view_clientPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Int32, ffi.Pointer<IhsWlClientInfo>)
+        >
+      >('ihs_wl_view_client');
+  late final _ihs_wl_view_client = _ihs_wl_view_clientPtr
+      .asFunction<int Function(int, ffi.Pointer<IhsWlClientInfo>)>();
+
   int ihs_wl_pointer(int view_id, ffi.Pointer<IhsWlPointerEvent> ev) {
     return _ihs_wl_pointer(view_id, ev);
   }
@@ -334,6 +347,32 @@ final class IhsWlConfig extends ffi.Struct {
   external int struct_size;
 
   external ffi.Pointer<ffi.Char> socket_name;
+}
+
+final class IhsWlClientInfo extends ffi.Struct {
+  @ffi.Size()
+  external int struct_size;
+
+  @ffi.Int32()
+  external int pid;
+
+  @ffi.Uint32()
+  external int uid;
+
+  @ffi.Uint32()
+  external int gid;
+
+  @ffi.Bool()
+  external bool sandboxed;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> sandbox_engine;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> sandbox_app_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> sandbox_instance_id;
 }
 
 final class IhsWlPointerEvent extends ffi.Struct {

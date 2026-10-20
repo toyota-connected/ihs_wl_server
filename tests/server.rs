@@ -49,6 +49,7 @@ fn maps_a_toplevel_under_the_mock_host() {
         *e == Observed::ToplevelMapped {
             app_id: "org.example.simple-shm".into(),
             title: "simple-shm".into(),
+            sandbox: None,
         }
     });
 

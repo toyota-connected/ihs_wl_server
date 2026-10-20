@@ -5,6 +5,7 @@
 /// client toplevel as an ivi-homescreen platform view.
 library;
 
+export 'src/client.dart' show WaylandClient, WaylandSandbox;
 export 'src/server.dart' show WaylandServer, WaylandServerException;
 export 'src/view.dart'
     show
