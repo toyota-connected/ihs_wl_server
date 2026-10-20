@@ -12,8 +12,16 @@
 //
 //   LAUNCH=gnome-calculator homescreen ...
 //
-// The bar above the client shows whether one is shown, scales it to a fixed
-// 800x600 (requestedSize), and closes it. The client's maximize and
+// With SANDBOX_APP_ID in the shell's environment, shows only a client in that
+// sandbox, such as a flatpak; a comma-separated list shows one view per app,
+// side by side:
+//
+//   SANDBOX_APP_ID=org.gnome.Calculator,org.gnome.TextEditor homescreen ...
+//   flatpak run org.gnome.Calculator
+//   flatpak run org.gnome.TextEditor
+//
+// The bar above the client shows whether one is shown and who it is, scales it
+// to a fixed 800x600 (requestedSize), and closes it. The client's maximize and
 // fullscreen requests are granted and hide the bar, and restoring brings it
 // back; its minimize button takes the view off screen (the client is
 // suspended) until Restore.
@@ -24,6 +32,13 @@ import 'package:flutter/material.dart';
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
 
 const String _appId = String.fromEnvironment('APP_ID');
+
+final List<String> _sandboxAppIds =
+    (Platform.environment['SANDBOX_APP_ID'] ?? '')
+        .split(',')
+        .map((String id) => id.trim())
+        .where((String id) => id.isNotEmpty)
+        .toList();
 
 /// The size the Scale button asks the client for.
 const Size _fixedSize = Size(800, 600);
@@ -48,16 +63,41 @@ class ExampleApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: ClientPage(socketName: socketName, token: token),
+      home: _sandboxAppIds.length < 2
+          ? ClientPage(
+              socketName: socketName,
+              token: token,
+              sandboxAppId: _sandboxAppIds.firstOrNull,
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                for (final (int i, String id) in _sandboxAppIds.indexed)
+                  Expanded(
+                    child: ClientPage(
+                      socketName: socketName,
+                      // A launched client is for the first view.
+                      token: i == 0 ? token : null,
+                      sandboxAppId: id,
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 }
 
 class ClientPage extends StatefulWidget {
-  const ClientPage({super.key, required this.socketName, this.token});
+  const ClientPage({
+    super.key,
+    required this.socketName,
+    this.token,
+    this.sandboxAppId,
+  });
 
   final String socketName;
   final String? token;
+  final String? sandboxAppId;
 
   @override
   State<ClientPage> createState() => _ClientPageState();
@@ -77,6 +117,17 @@ class _ClientPageState extends State<ClientPage> {
   bool _filled = false;
   bool _minimized = false;
   bool _scaled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(
+      () => debugPrint(
+        'client for ${widget.sandboxAppId ?? 'any'}: '
+        '${_describe(_controller.client)}',
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -112,6 +163,7 @@ class _ClientPageState extends State<ClientPage> {
     final Widget view = WaylandToplevelView(
       activationToken: widget.token,
       appId: _appId.isEmpty ? null : _appId,
+      sandboxAppId: widget.sandboxAppId,
       controller: _controller,
       requestedSize: _scaled ? _fixedSize : null,
     );
@@ -152,7 +204,7 @@ class _ClientPageState extends State<ClientPage> {
               Expanded(
                 child: Text(
                   'WAYLAND_DISPLAY=${widget.socketName}  '
-                  '${_controller.isBound ? 'client shown' : 'no client'}',
+                  '${_describe(_controller.client)}',
                 ),
               ),
               FilterChip(
@@ -174,4 +226,14 @@ class _ClientPageState extends State<ClientPage> {
       ),
     );
   }
+}
+
+/// Who [client] is, for the bar.
+String _describe(WaylandClient? client) {
+  if (client == null) {
+    return 'no client';
+  }
+  final WaylandSandbox? sandbox = client.sandbox;
+  return 'pid ${client.pid}'
+      '${sandbox == null ? '' : ' in ${sandbox.engine} ${sandbox.appId}'}';
 }
