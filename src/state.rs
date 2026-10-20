@@ -24,6 +24,7 @@ use smithay::wayland::fifo::FifoManagerState;
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::security_context::{SecurityContext, SecurityContextState};
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::xdg::{ToplevelSurface, XdgShellState, XdgToplevelSurfaceData};
 use smithay::wayland::shm::ShmState;
@@ -76,6 +77,9 @@ pub struct State {
     pub caps: Caps,
     pub seat_state: SeatState<Self>,
     pub activation_state: smithay::wayland::xdg_activation::XdgActivationState,
+    /// Kept alive for the global's lifetime.
+    #[allow(dead_code)]
+    pub security_context_state: SecurityContextState,
     /// Kept alive for the global's lifetime.
     #[allow(dead_code)]
     pub cursor_shape_state: smithay::wayland::cursor_shape::CursorShapeManagerState,
@@ -276,6 +280,7 @@ impl State {
             activation_state: smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(
                 &dh,
             ),
+            security_context_state: crate::handlers::security_context::global(&dh),
             seat_state,
             seat,
             devices,
@@ -302,9 +307,12 @@ impl State {
         }
     }
 
-    pub fn accept_client(&mut self, stream: UnixStream) {
+    /// Add a client connected on @p stream: on the server's socket, or on a
+    /// sandbox's listener (@p security_context).
+    pub fn accept_client(&mut self, stream: UnixStream, security_context: Option<SecurityContext>) {
         let data = Arc::new(ClientState {
             compositor_state: CompositorClientState::default(),
+            security_context,
             clients: self.clients.clone(),
             gone: self.gone.clone(),
         });
@@ -671,6 +679,9 @@ impl State {
 /// Per-client data. Counts connections for `ClientCount`.
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
+    /// The sandbox the client connected through (wp_security_context_v1), or
+    /// `None` on the server's own socket.
+    pub security_context: Option<SecurityContext>,
     clients: Arc<AtomicU32>,
     gone: Arc<Mutex<Vec<ClientId>>>,
 }
