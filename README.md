@@ -23,7 +23,12 @@ Early development. Working today:
   `wp_fifo_manager_v1`, `wp_commit_timing_manager_v1`,
   `wp_linux_drm_syncobj_manager_v1` (when a render node supports it),
   `wl_seat`, `wp_cursor_shape_manager_v1`, `xdg_activation_v1`,
-  `wl_data_device_manager`, `wl_output` and `zxdg_output_manager_v1`.
+  `wl_data_device_manager`, `wl_output`, `zxdg_output_manager_v1` and
+  `wp_security_context_manager_v1`.
+- `wp_security_context_v1`: a sandbox engine (flatpak 1.15.6 or newer) makes
+  a listener for one app, served until the engine closes it. Clients that
+  connect through it carry the sandbox's engine, app id and instance id, and
+  do not see the manager.
 - A view binds to a toplevel by activation token or app_id and configures
   it to the view's size, or to a size the view requests, scaled to fit; a
   window the client makes larger than asked (a minimum size wider than the

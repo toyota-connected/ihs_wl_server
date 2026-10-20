@@ -41,6 +41,12 @@ pub enum Observed {
     WaitsDropped {
         count: usize,
     },
+    /// A client made a sandbox listener (wp_security_context_v1).
+    SecurityContextCreated {
+        sandbox_engine: Option<String>,
+        app_id: Option<String>,
+        instance_id: Option<String>,
+    },
 }
 
 pub type Observer = Arc<dyn Fn(&Observed) + Send + Sync>;
