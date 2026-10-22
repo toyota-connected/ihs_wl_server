@@ -81,6 +81,8 @@ struct App {
     /// wl_buffer.release events, by the client's buffer index.
     released: HashMap<usize, u32>,
     frames_done: u32,
+    /// The last frame callback's time (callback_data), in milliseconds.
+    frame_time_ms: Option<u32>,
     presentation: Option<wp_presentation::WpPresentation>,
     presentation_clock: Option<u32>,
     fifo_manager: Option<wp_fifo_manager_v1::WpFifoManagerV1>,
@@ -553,6 +555,10 @@ impl Client {
         self.app.frames_done
     }
 
+    pub fn frame_time_ms(&self) -> Option<u32> {
+        self.app.frame_time_ms
+    }
+
     pub fn configure_size(&self) -> Option<(i32, i32)> {
         self.app.configure_size
     }
@@ -927,8 +933,9 @@ impl Dispatch<wl_callback::WlCallback, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_callback::Event::Done { .. } = event {
+        if let wl_callback::Event::Done { callback_data } = event {
             app.frames_done += 1;
+            app.frame_time_ms = Some(callback_data);
         }
     }
 }

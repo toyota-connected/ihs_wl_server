@@ -59,6 +59,49 @@ fn a_reported_frame_answers_at_once() {
     mock_host::dispose_view(31);
 }
 
+fn now_ms() -> u32 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    (ts.tv_sec as u64 * 1_000 + ts.tv_nsec as u64 / 1_000_000) as u32
+}
+
+/// The callback carries the time the frame was shown -- but never a time
+/// still to come. A flip is stamped when scanout starts, which on vc4 is ~1 ms
+/// after the report, and a client committing at once saw a negative
+/// callback-to-commit (weston-presentation-shm f2c).
+#[test]
+fn a_callback_is_timed_when_shown_but_never_ahead() {
+    let _serial = serial();
+    let (mut h, a, b) = shown("ihs-wl-test-frames-time", 36);
+    let refresh = 16_666_667;
+
+    let shown_ns = (now_ms() as u64 - 3) * 1_000_000;
+    h.client.commit_buffer(b, true);
+    let seq = h.wait_submissions(36, 2)[1].seq;
+    mock_host::present_at(36, seq, shown_ns, refresh, 2, 0);
+    until_done(&mut h, 1);
+    assert_eq!(
+        h.client.frame_time_ms(),
+        Some((shown_ns / 1_000_000) as u32)
+    );
+
+    let ahead_ns = (now_ms() as u64 + 50) * 1_000_000;
+    h.client.commit_buffer(a, true);
+    let seq = h.wait_submissions(36, 3)[2].seq;
+    mock_host::present_at(36, seq, ahead_ns, refresh, 3, 0);
+    until_done(&mut h, 2);
+    let received = now_ms();
+    let time = h.client.frame_time_ms().unwrap();
+    assert!(
+        time <= received,
+        "called back at {time}, received at {received}"
+    );
+    mock_host::dispose_view(36);
+}
+
 #[test]
 fn a_lost_report_still_answers() {
     let _serial = serial();
