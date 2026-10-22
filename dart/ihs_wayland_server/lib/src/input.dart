@@ -114,6 +114,23 @@ class WaylandInput {
   /// Mouse buttons held, by Flutter device.
   final Map<int, int> _buttons = <int, int>{};
 
+  /// Logical pixels on screen per logical pixel of the view's layout, by
+  /// view, where not 1: the server takes the view as it is on screen.
+  final Map<int, double> _scales = <int, double>{};
+
+  /// The view is drawn @p scale times its layout size on screen.
+  void setViewScale(int viewId, double scale) {
+    if (scale == 1.0) {
+      _scales.remove(viewId);
+    } else {
+      _scales[viewId] = scale;
+    }
+  }
+
+  /// @p event's position over the view, on screen.
+  Offset _position(int viewId, PointerEvent event) =>
+      event.localPosition * (_scales[viewId] ?? 1.0);
+
   /// The cursor the client under the pointer asked for, as `ihs_wl_pointer`
   /// returns it; see [cursorFor].
   final ValueNotifier<int> cursor = ValueNotifier<int>(0);
@@ -159,8 +176,9 @@ class WaylandInput {
     ev.axis_source = event.kind == PointerDeviceKind.trackpad
         ? 1 // finger
         : 0; // wheel
-    ev.axis_x = event.scrollDelta.dx;
-    ev.axis_y = event.scrollDelta.dy;
+    final Offset delta = event.scrollDelta * (_scales[viewId] ?? 1.0);
+    ev.axis_x = delta.dx;
+    ev.axis_y = delta.dy;
     _sendPointer(viewId, IhsWlPointerKind.IHS_WL_POINTER_KIND_AXIS, event);
     ev.axis_x = 0;
     ev.axis_y = 0;
@@ -175,8 +193,9 @@ class WaylandInput {
   void _sendPointer(int viewId, IhsWlPointerKind kind, PointerEvent event) {
     final IhsWlPointerEvent ev = _pointer.ref;
     ev.kind = kind.value;
-    ev.x = event.localPosition.dx;
-    ev.y = event.localPosition.dy;
+    final Offset position = _position(viewId, event);
+    ev.x = position.dx;
+    ev.y = position.dy;
     ev.time_us = event.timeStamp.inMicroseconds;
     final int shape = _lib.ihs_wl_pointer(viewId, _pointer);
     if (shape >= 0) {
@@ -208,8 +227,9 @@ class WaylandInput {
     final IhsWlTouchEvent ev = _touch.ref;
     ev.kind = kind.value;
     ev.slot = event.pointer & 0x7fffffff;
-    ev.x = event.localPosition.dx;
-    ev.y = event.localPosition.dy;
+    final Offset position = _position(viewId, event);
+    ev.x = position.dx;
+    ev.y = position.dy;
     ev.time_us = event.timeStamp.inMicroseconds;
     _lib.ihs_wl_touch(viewId, _touch);
   }
