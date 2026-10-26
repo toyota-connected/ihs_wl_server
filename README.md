@@ -336,7 +336,13 @@ syntax; the default is `info,smithay=warn`.
 cargo test
 cargo clippy --all-targets
 cargo fmt --check
+cargo deny check   # crate licenses and advisories, deny.toml
 ```
+
+CI (`.github/workflows/ci.yml`) runs these with and without
+`egl-wl-display`, against ivi-homescreen v3.0's `libihs_shared`, checks that
+`include/ihs_wl.h` and the Dart bindings match the code, and runs the Dart
+package's analyze, format, tests and pana.
 
 The integration tests run the server against a mock of the shell's
 platform-view interface and drive it with a real Wayland client. In place of
