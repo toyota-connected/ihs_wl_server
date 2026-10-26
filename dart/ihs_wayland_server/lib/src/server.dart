@@ -5,6 +5,7 @@ import 'dart:ffi' as ffi;
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'bindings.g.dart';
 import 'events.dart';
@@ -12,7 +13,12 @@ import 'input.dart';
 import 'loader.dart';
 
 /// Where views send input: the running server's, if one was started.
-WaylandInput? get waylandInput => WaylandServer._instance?._input;
+WaylandInput? get waylandInput =>
+    debugWaylandInput ?? WaylandServer._instance?._input;
+
+/// Takes views' input in place of a server's.
+@visibleForTesting
+WaylandInput? debugWaylandInput;
 
 /// A failed call into libihs_wl_server.
 class WaylandServerException implements Exception {
