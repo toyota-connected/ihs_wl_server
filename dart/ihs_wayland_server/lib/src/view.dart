@@ -1,9 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -39,6 +43,13 @@ const String _viewType = 'ihs_wl/toplevel';
 /// that size instead, and its content is scaled to fit the view, aspect
 /// kept, centered.
 ///
+/// A view an ancestor draws scaled (a [FittedBox], a [Transform.scale]) is
+/// sized, and takes input, as it is on screen: the shell draws the client's
+/// buffers into the view's rect on screen, so the client renders at 1:1
+/// there rather than at the size of the app's layout. With [sizeOnScreen]
+/// false it is asked for the size it is laid out at, as with a
+/// [requestedSize], and scaled to fit.
+///
 /// A [controller] reports whether a toplevel is shown and the window-state
 /// changes its client asks for, and asks the client to close.
 ///
@@ -56,6 +67,7 @@ class WaylandToplevelView extends StatefulWidget {
     this.controller,
     this.focusNode,
     this.autofocus = false,
+    this.sizeOnScreen = true,
   });
 
   /// The token the client was launched with.
@@ -78,6 +90,12 @@ class WaylandToplevelView extends StatefulWidget {
   final FocusNode? focusNode;
   final bool autofocus;
 
+  /// Size the client as the view is on screen when an ancestor draws it
+  /// scaled. False asks it for the size the view is laid out at, scaled to
+  /// fit the view on screen, aspect kept, centered; a [requestedSize] comes
+  /// first. May change at any time.
+  final bool sizeOnScreen;
+
   @override
   State<WaylandToplevelView> createState() => _WaylandToplevelViewState();
 }
@@ -96,6 +114,38 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
 
   /// A toplevel is shown.
   bool _bound = false;
+
+  /// The platform view's controller, once PlatformViewLink asked for one.
+  _ToplevelViewController? _view;
+
+  /// The scale the view is drawn at on screen, once measured.
+  Offset? _scale;
+
+  /// The size the view was last laid out at.
+  Size? _layoutSize;
+
+  void _onScale(Offset scale) {
+    _scale = scale;
+    _view?.drawnAt(scale);
+  }
+
+  void _onLayout(Size size) {
+    _layoutSize = size;
+    if (!widget.sizeOnScreen && widget.requestedSize == null) {
+      _sendRequestedSize();
+    }
+  }
+
+  /// The size to ask the client for instead of the view's on screen.
+  Size? get _requestedSize =>
+      widget.requestedSize ?? (widget.sizeOnScreen ? null : _layoutSize);
+
+  void _sendRequestedSize() {
+    final int? id = _viewId;
+    if (id != null) {
+      waylandInput?.requestSize(id, _requestedSize);
+    }
+  }
 
   @override
   void dispose() {
@@ -149,7 +199,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
     _sendController(id);
     // The creation params carry the size the view was built with; this one
     // may have changed since.
-    waylandInput?.requestSize(id, widget.requestedSize);
+    _sendRequestedSize();
     if (_focus.hasFocus) {
       waylandInput?.focus(id, true);
     }
@@ -173,9 +223,9 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
         _sendController(id);
       }
     }
-    final int? id = _viewId;
-    if (id != null && widget.requestedSize != oldWidget.requestedSize) {
-      waylandInput?.requestSize(id, widget.requestedSize);
+    if (widget.requestedSize != oldWidget.requestedSize ||
+        widget.sizeOnScreen != oldWidget.sizeOnScreen) {
+      _sendRequestedSize();
     }
   }
 
@@ -239,55 +289,64 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
             onPointerSignal: _onSignal,
             child: Stack(
               children: <Widget>[
-                PlatformViewLink(
-                  viewType: _viewType,
-                  surfaceFactory:
-                      (
-                        BuildContext context,
-                        PlatformViewController controller,
-                      ) {
-                        // The shell learns a new size only from a resize
-                        // call; PlatformViewLink creates at the first size
-                        // and never reports another.
-                        return _LayoutListener(
-                          onLayout:
-                              (controller as _ToplevelViewController).laidOut,
-                          child: PlatformViewSurface(
-                            controller: controller,
-                            gestureRecognizers:
-                                const <Factory<OneSequenceGestureRecognizer>>{
-                                  Factory<OneSequenceGestureRecognizer>(
-                                    EagerGestureRecognizer.new,
-                                  ),
-                                },
-                            hitTestBehavior: PlatformViewHitTestBehavior.opaque,
-                          ),
-                        );
-                      },
-                  onCreatePlatformView: (PlatformViewCreationParams params) {
-                    // Before the create: a bind can land while it is in
-                    // flight.
-                    _watch(params.id);
-                    // PlatformViewLink calls create(size:) once laid out, so
-                    // the view is created at its real size rather than 0x0.
-                    return _ToplevelViewController(
-                      id: params.id,
-                      creationParams: <String, Object?>{
-                        'token': widget.activationToken,
-                        'app_id': widget.appId,
-                        'sandbox_app_id': widget.sandboxAppId,
-                        'dpr': dpr,
-                        'capabilities': widget.controller?._capabilityBits ?? 0,
-                        'window_state': widget.controller?._stateBits ?? 0,
-                        'requested_width': widget.requestedSize?.width,
-                        'requested_height': widget.requestedSize?.height,
-                      },
-                      onCreated: (int id) {
-                        _created(id);
-                        params.onPlatformViewCreated(id);
-                      },
-                    );
-                  },
+                // Outside the link, so the scale is known before the view
+                // is created: the surface is built only after.
+                _ScaleListener(
+                  onScale: _onScale,
+                  onLayout: _onLayout,
+                  child: PlatformViewLink(
+                    viewType: _viewType,
+                    surfaceFactory:
+                        (
+                          BuildContext context,
+                          PlatformViewController controller,
+                        ) {
+                          // The shell learns a new size only from a resize
+                          // call; PlatformViewLink creates at the first size
+                          // and never reports another.
+                          return _LayoutListener(
+                            onLayout:
+                                (controller as _ToplevelViewController).laidOut,
+                            child: PlatformViewSurface(
+                              controller: controller,
+                              gestureRecognizers:
+                                  const <Factory<OneSequenceGestureRecognizer>>{
+                                    Factory<OneSequenceGestureRecognizer>(
+                                      EagerGestureRecognizer.new,
+                                    ),
+                                  },
+                              hitTestBehavior:
+                                  PlatformViewHitTestBehavior.opaque,
+                            ),
+                          );
+                        },
+                    onCreatePlatformView: (PlatformViewCreationParams params) {
+                      // Before the create: a bind can land while it is in
+                      // flight.
+                      _watch(params.id);
+                      // PlatformViewLink calls create(size:) once laid out, so
+                      // the view is created at its real size rather than 0x0.
+                      return _view = _ToplevelViewController(
+                        id: params.id,
+                        scale: _scale,
+                        creationParams: <String, Object?>{
+                          'token': widget.activationToken,
+                          'app_id': widget.appId,
+                          'sandbox_app_id': widget.sandboxAppId,
+                          'dpr': dpr,
+                          'capabilities':
+                              widget.controller?._capabilityBits ?? 0,
+                          'window_state': widget.controller?._stateBits ?? 0,
+                          'requested_width': _requestedSize?.width,
+                          'requested_height': _requestedSize?.height,
+                        },
+                        onCreated: (int id) {
+                          _created(id);
+                          params.onPlatformViewCreated(id);
+                        },
+                      );
+                    },
+                  ),
                 ),
                 // A platform view leaves the cursor to the platform: this
                 // sets it, without taking the events from the view.
@@ -331,7 +390,12 @@ class _ToplevelViewController extends PlatformViewController {
     required this.id,
     required this.creationParams,
     required this.onCreated,
-  });
+    Offset? scale,
+  }) : _scale = scale ?? _unscaled {
+    if (scale != null) {
+      _measured.complete();
+    }
+  }
 
   final int id;
   final Map<String, Object?> creationParams;
@@ -350,17 +414,52 @@ class _ToplevelViewController extends PlatformViewController {
   Future<void> create({Size? size, Offset? position}) =>
       _creation ??= _createOnce(size);
 
-  /// The size the shell was last given, at create or resize.
+  /// The size the shell was last given, at create or resize: the view's on
+  /// screen.
   Size? _sentSize;
 
   /// The size the view was last laid out at.
   Size? _laidOut;
 
+  /// Logical pixels on screen per logical pixel of the view's layout, per
+  /// axis: not 1 where an ancestor draws it scaled.
+  Offset _scale;
+
+  /// The scale is known: the view is created at its size on screen.
+  final Completer<void> _measured = Completer<void>();
+
+  /// @p size, laid out, as it is on screen.
+  Size _onScreen(Size size) =>
+      Size(size.width * _scale.dx, size.height * _scale.dy);
+
   /// The view was laid out at @p size: tell the shell if it has another.
   void laidOut(Size size) {
     _laidOut = size;
-    if (_created && size != _sentSize) {
-      _resize(size);
+    _sendSize();
+  }
+
+  /// The view is drawn @p scale times its layout size on screen, per axis.
+  void drawnAt(Offset scale) {
+    if (!_measured.isCompleted) {
+      _measured.complete();
+    }
+    if (scale == _scale) {
+      return;
+    }
+    _scale = scale;
+    // The shell draws the client's buffers into the view's rect on screen,
+    // and the server places them in the size it was given: give it that
+    // rect's, and input to match.
+    if (_created) {
+      waylandInput?.setViewScale(id, scale);
+    }
+    _sendSize();
+  }
+
+  void _sendSize() {
+    final Size? laidOut = _laidOut;
+    if (_created && laidOut != null && _onScreen(laidOut) != _sentSize) {
+      _resize(_onScreen(laidOut));
     }
   }
 
@@ -372,7 +471,10 @@ class _ToplevelViewController extends PlatformViewController {
     );
   }
 
-  Future<void> _createOnce(Size? size) async {
+  Future<void> _createOnce(Size? laidOut) async {
+    // Measured after the frame that laid the view out.
+    await _measured.future;
+    final Size? size = laidOut == null ? null : _onScreen(laidOut);
     _sentSize = size;
     final ByteData? params = const StandardMessageCodec().encodeMessage(
       creationParams,
@@ -391,12 +493,12 @@ class _ToplevelViewController extends PlatformViewController {
             ),
         });
     _created = true;
+    waylandInput?.setViewScale(id, _scale);
     onCreated(id);
-    // Laid out again while the create was in flight.
-    final Size? laidOut = _laidOut;
-    if (laidOut != null && laidOut != _sentSize) {
-      _resize(laidOut);
-    }
+    // Laid out again, or drawn at another scale, while the create was in
+    // flight.
+    _laidOut ??= laidOut;
+    _sendSize();
   }
 
   // Straight to the module over FFI: no platform channel, no platform
@@ -416,12 +518,15 @@ class _ToplevelViewController extends PlatformViewController {
     if (!_created) {
       return;
     }
+    waylandInput?.setViewScale(id, _unscaled);
     await SystemChannels.platform_views.invokeMethod<void>(
       'dispose',
       <String, Object>{'id': id},
     );
   }
 }
+
+const Offset _unscaled = Offset(1, 1);
 
 /// Reports its size after every layout that changes it.
 class _LayoutListener extends SingleChildRenderObjectWidget {
@@ -455,5 +560,109 @@ class _RenderLayoutListener extends RenderProxyBox {
       _last = size;
       onLayout(size);
     }
+  }
+}
+
+/// Reports the scale it is drawn at on screen, per axis: logical pixels on
+/// screen per logical pixel of its layout. After its first frame, then
+/// after every frame that changes it. And its size after every layout that
+/// changes it.
+///
+/// After every frame, not at paint: an ancestor's transform can change
+/// without this box repainting (a RepaintBoundary between them, an animated
+/// Transform), and a FittedBox sets its scale only after laying out its
+/// child.
+class _ScaleListener extends SingleChildRenderObjectWidget {
+  const _ScaleListener({
+    required this.onScale,
+    required this.onLayout,
+    required super.child,
+  });
+
+  final ValueChanged<Offset> onScale;
+  final ValueChanged<Size> onLayout;
+
+  @override
+  _RenderScaleListener createRenderObject(BuildContext context) =>
+      _RenderScaleListener(onScale, onLayout);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderScaleListener renderObject,
+  ) {
+    renderObject
+      ..onScale = onScale
+      ..onLayout = onLayout;
+  }
+}
+
+class _RenderScaleListener extends RenderProxyBox {
+  _RenderScaleListener(this.onScale, this.onLayout);
+
+  ValueChanged<Offset> onScale;
+  ValueChanged<Size> onLayout;
+  Offset? _last;
+  Size? _lastSize;
+  bool _checking = false;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    if (size != _lastSize) {
+      _lastSize = size;
+      onLayout(size);
+    }
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _checkAfterFrame();
+  }
+
+  void _checkAfterFrame() {
+    if (_checking) {
+      return;
+    }
+    _checking = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _checking = false;
+      if (!attached) {
+        return;
+      }
+      _check();
+      _checkAfterFrame();
+    }, debugLabel: 'WaylandToplevelView scale');
+  }
+
+  void _check() {
+    // To the top box, in logical pixels: below the root, which applies the
+    // device pixel ratio. An axis's scale is the length of its unit vector
+    // there, rotation aside.
+    RenderObject top = this;
+    while (true) {
+      final RenderObject? parent = top.parent;
+      if (parent == null || parent is RenderView) {
+        break;
+      }
+      top = parent;
+    }
+    final Matrix4 m = getTransformTo(top);
+    double length(int column) {
+      final double x = m.entry(0, column);
+      final double y = m.entry(1, column);
+      return math.sqrt(x * x + y * y);
+    }
+
+    final Offset scale = Offset(length(0), length(1));
+    final Offset? last = _last;
+    if (last != null &&
+        (scale.dx - last.dx).abs() < 1e-3 &&
+        (scale.dy - last.dy).abs() < 1e-3) {
+      return;
+    }
+    _last = scale;
+    onScale(scale);
   }
 }

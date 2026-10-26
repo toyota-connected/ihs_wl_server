@@ -143,7 +143,9 @@ LAUNCH=gtk4-widget-factory \
   it.
 
 The example's bar has Scale 800x600 (the client asked for a fixed size and
-scaled to fit) and Close. It grants maximize and fullscreen, which hide the
+scaled to fit), Zoom (the view drawn at 1x1, 0.5x0.5 or 0.5x0.75 by a
+`Transform`), On-screen size (`sizeOnScreen`: the client sized as the view is
+on screen, or asked for its layout size and scaled to fit) and Close. It grants maximize and fullscreen, which hide the
 bar, and its minimize hides the view behind Restore (the client is told
 `suspended`).
 
