@@ -27,6 +27,9 @@ pub struct ViewParams {
     pub token: Option<String>,
     /// Bind the oldest unbound toplevel with this app_id.
     pub app_id: Option<String>,
+    /// Bind only a toplevel of a client in the sandbox with this app_id
+    /// (wp_security_context_v1).
+    pub sandbox_app_id: Option<String>,
     /// Device pixel ratio of the view.
     pub dpr: Option<f64>,
     /// The size to ask the client for instead of the view's, in logical
@@ -53,6 +56,7 @@ impl ViewParams {
         ViewParams {
             token: string("token"),
             app_id: string("app_id"),
+            sandbox_app_id: string("sandbox_app_id"),
             dpr: positive("dpr"),
             requested: crate::requested_size(
                 positive("requested_width").unwrap_or(0.0),

@@ -13,6 +13,9 @@ pub enum Observed {
     ToplevelMapped {
         app_id: String,
         title: String,
+        /// The client's sandbox engine and app_id, when it connected
+        /// through a security context.
+        sandbox: Option<(Option<String>, Option<String>)>,
     },
     ToplevelUnmapped {
         app_id: String,
@@ -40,6 +43,12 @@ pub enum Observed {
     /// buffers; the waits are dropped.
     WaitsDropped {
         count: usize,
+    },
+    /// A client made a sandbox listener (wp_security_context_v1).
+    SecurityContextCreated {
+        sandbox_engine: Option<String>,
+        app_id: Option<String>,
+        instance_id: Option<String>,
     },
 }
 

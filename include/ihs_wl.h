@@ -222,6 +222,41 @@ typedef struct IhsWlConfig {
 } IhsWlConfig;
 
 /*
+ Who a view's client is, as `ihs_wl_view_client` reports it. Strings
+ are NUL-terminated; an unset one is empty.
+ */
+typedef struct IhsWlClientInfo {
+  /*
+   `sizeof(IhsWlClientInfo)`.
+   */
+  size_t struct_size;
+  /*
+   The client's credentials (`SO_PEERCRED`) as of when it connected.
+   */
+  int32_t pid;
+  uint32_t uid;
+  uint32_t gid;
+  /*
+   Connected through a sandbox engine's security context
+   (wp_security_context_v1). The fields below are the engine's, which
+   the client cannot set; empty otherwise.
+   */
+  bool sandboxed;
+  /*
+   The sandbox engine, e.g. `org.flatpak`.
+   */
+  char sandbox_engine[256];
+  /*
+   The app within the sandbox engine, e.g. a flatpak app id.
+   */
+  char sandbox_app_id[256];
+  /*
+   The running instance of the app.
+   */
+  char sandbox_instance_id[256];
+} IhsWlClientInfo;
+
+/*
  Pointer input, in view-local logical pixels.
  */
 typedef struct IhsWlPointerEvent {
@@ -313,6 +348,17 @@ const char *ihs_wl_socket_name(void);
  `out` must be writable for `cap` bytes.
  */
 int ihs_wl_activation_token(char *out, size_t cap);
+
+/*
+ Who the client of the toplevel the view `view_id` shows is: writes
+ `info` and returns 1, or returns 0 while the view shows none. Waits for
+ the server thread, so not from a callback the server makes.
+
+ # Safety
+ `info` must point to a writable `IhsWlClientInfo` whose `struct_size` is
+ set.
+ */
+int ihs_wl_view_client(int32_t view_id, struct IhsWlClientInfo *info);
 
 /*
  Pointer input for the view `view_id`. Any thread; only enqueues. Returns

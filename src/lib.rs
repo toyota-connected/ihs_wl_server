@@ -201,6 +201,47 @@ pub struct IhsWlTouchEvent {
     pub time_us: u64,
 }
 
+/// Who a view's client is, as `ihs_wl_view_client` reports it. Strings
+/// are NUL-terminated; an unset one is empty.
+#[repr(C)]
+pub struct IhsWlClientInfo {
+    /// `sizeof(IhsWlClientInfo)`.
+    pub struct_size: usize,
+    /// The client's credentials (`SO_PEERCRED`) as of when it connected.
+    pub pid: i32,
+    pub uid: u32,
+    pub gid: u32,
+    /// Connected through a sandbox engine's security context
+    /// (wp_security_context_v1). The fields below are the engine's, which
+    /// the client cannot set; empty otherwise.
+    pub sandboxed: bool,
+    /// The sandbox engine, e.g. `org.flatpak`.
+    pub sandbox_engine: [c_char; 256],
+    /// The app within the sandbox engine, e.g. a flatpak app id.
+    pub sandbox_app_id: [c_char; 256],
+    /// The running instance of the app.
+    pub sandbox_instance_id: [c_char; 256],
+}
+
+/// Who a view's client is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientInfo {
+    pub pid: i32,
+    pub uid: u32,
+    pub gid: u32,
+    /// Set when it connected through a security context.
+    pub sandbox: Option<Sandbox>,
+}
+
+/// The security context a client connected through, as its sandbox engine
+/// set it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sandbox {
+    pub engine: Option<String>,
+    pub app_id: Option<String>,
+    pub instance_id: Option<String>,
+}
+
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
 }
@@ -335,6 +376,51 @@ pub unsafe extern "C" fn ihs_wl_activation_token(out: *mut c_char, cap: usize) -
         *out.add(token.len()) = 0;
         Ok(token.len() as c_int)
     })
+}
+
+/// Who the client of the toplevel the view `view_id` shows is: writes
+/// `info` and returns 1, or returns 0 while the view shows none. Waits for
+/// the server thread, so not from a callback the server makes.
+///
+/// # Safety
+/// `info` must point to a writable `IhsWlClientInfo` whose `struct_size` is
+/// set.
+#[no_mangle]
+pub unsafe extern "C" fn ihs_wl_view_client(view_id: i32, info: *mut IhsWlClientInfo) -> c_int {
+    guard("ihs_wl_view_client", || {
+        sized("info", info.cast_const())?;
+        let Some(client) = view_client(view_id)? else {
+            return Ok(0);
+        };
+        let info = &mut *info;
+        info.pid = client.pid;
+        info.uid = client.uid;
+        info.gid = client.gid;
+        info.sandboxed = client.sandbox.is_some();
+        let sandbox = client.sandbox.unwrap_or(Sandbox {
+            engine: None,
+            app_id: None,
+            instance_id: None,
+        });
+        copy_str(&mut info.sandbox_engine, sandbox.engine.as_deref());
+        copy_str(&mut info.sandbox_app_id, sandbox.app_id.as_deref());
+        copy_str(
+            &mut info.sandbox_instance_id,
+            sandbox.instance_id.as_deref(),
+        );
+        Ok(1)
+    })
+}
+
+/// Copy @p s into @p out NUL-terminated; the server never holds one longer
+/// than fits (`IDENTITY_MAX`), and a NUL inside ends it there.
+fn copy_str(out: &mut [c_char; 256], s: Option<&str>) {
+    let bytes = s.unwrap_or_default().as_bytes();
+    let n = bytes.len().min(out.len() - 1);
+    for (o, b) in out.iter_mut().zip(&bytes[..n]) {
+        *o = *b as c_char;
+    }
+    out[n] = 0;
 }
 
 /// Pointer input for the view `view_id`. Any thread; only enqueues. Returns
@@ -522,4 +608,13 @@ pub fn stop() -> Result<()> {
 
 pub fn socket_name() -> Option<String> {
     thread::socket_name()
+}
+
+/// Who the client of the toplevel the view @p view_id shows is; None while
+/// it shows none.
+pub fn view_client(view_id: i32) -> Result<Option<ClientInfo>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    thread::send(thread::Cmd::ViewClient { view_id, reply: tx })?;
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| Error::new(IhsWlResult::ErrInternal as i32, format!("no reply: {e}")))
 }

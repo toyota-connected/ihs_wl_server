@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'bindings.g.dart' show IhsWlViewEvent;
+import 'client.dart';
 import 'events.dart';
 import 'input.dart';
 import 'server.dart';
@@ -29,6 +30,11 @@ const String _viewType = 'ihs_wl/toplevel';
 /// neither, the oldest toplevel not shown elsewhere -- in both cases passing
 /// over toplevels launched with a token, which are for the views naming
 /// theirs. Until a matching client maps, the view is empty.
+///
+/// A client sandboxed by an engine such as flatpak (wp_security_context_v1)
+/// matches [appId] only when it is its sandbox's app id. With a
+/// [sandboxAppId], only a toplevel of a client in that sandbox matches,
+/// whichever way it is found and whatever app id the client sets.
 ///
 /// The client is asked for the view's size as it is laid out, and follows
 /// it through every layout change. With a [requestedSize] it is asked for
@@ -52,6 +58,7 @@ class WaylandToplevelView extends StatefulWidget {
     super.key,
     this.activationToken,
     this.appId,
+    this.sandboxAppId,
     this.requestedSize,
     this.controller,
     this.focusNode,
@@ -61,6 +68,9 @@ class WaylandToplevelView extends StatefulWidget {
   /// The token the client was launched with.
   final String? activationToken;
   final String? appId;
+
+  /// The sandbox app id the client must run under, e.g. a flatpak app id.
+  final String? sandboxAppId;
 
   /// The size to ask the client for, in logical pixels, instead of the
   /// view's. Its content is scaled to fit the view, aspect kept, centered,
@@ -278,6 +288,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                       creationParams: <String, Object?>{
                         'token': widget.activationToken,
                         'app_id': widget.appId,
+                        'sandbox_app_id': widget.sandboxAppId,
                         'dpr': dpr,
                         'capabilities': widget.controller?._capabilityBits ?? 0,
                         'window_state': widget.controller?._stateBits ?? 0,

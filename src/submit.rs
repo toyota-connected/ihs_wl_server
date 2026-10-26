@@ -480,7 +480,7 @@ impl State {
 /// the next one. @p ust_ns is CLOCK_MONOTONIC; the callback's time is
 /// milliseconds on any base.
 pub fn send_frame_callbacks(root: &WlSurface, ust_ns: u64) {
-    let time_ms = (ust_ns / 1_000_000) as u32;
+    let time_ms = callback_time_ms(ust_ns, crate::timing::now_ns());
     compositor::with_surface_tree_downward(
         root,
         (),
@@ -499,6 +499,14 @@ pub fn send_frame_callbacks(root: &WlSurface, ust_ns: u64) {
         },
         |_, _, _| true,
     );
+}
+
+/// A frame callback's time: the frame's, but never later than @p now_ns -- the
+/// protocol's is the current time. A flip is stamped when scanout starts,
+/// which can follow its report (vc4: ~1 ms), and a client that commits as
+/// soon as it is called back saw its commit come before the callback.
+fn callback_time_ms(shown_ns: u64, now_ns: u64) -> u32 {
+    (shown_ns.min(now_ns) / 1_000_000) as u32
 }
 
 #[cfg(test)]
@@ -548,6 +556,12 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_callback_is_never_timed_after_now() {
+        assert_eq!(callback_time_ms(5_000_000_000, 5_003_000_000), 5_000);
+        assert_eq!(callback_time_ms(5_001_000_000, 5_000_100_000), 5_000);
+    }
 
     #[test]
     fn fixed_point() {

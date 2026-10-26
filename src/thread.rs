@@ -86,6 +86,11 @@ pub enum Cmd {
     },
     /// Issue an activation token, sent back on the channel.
     IssueToken(std::sync::mpsc::SyncSender<String>),
+    /// The client of the toplevel the view shows, sent back on the channel.
+    ViewClient {
+        view_id: i32,
+        reply: std::sync::mpsc::SyncSender<Option<crate::ClientInfo>>,
+    },
     /// The shell's scanout hint for a layer of the view (display thread).
     ScanoutHint {
         view_id: i32,
@@ -258,7 +263,7 @@ fn run(config: &Config, caps: &crate::caps::Caps, ready: &mut Option<Ready>) -> 
 
     let handle = event_loop.handle();
     handle
-        .insert_source(socket, |stream, _, state| state.accept_client(stream))
+        .insert_source(socket, |stream, _, state| state.accept_client(stream, None))
         .map_err(|e| Error::internal(format!("insert socket source: {}", e.error)))?;
     handle
         .insert_source(

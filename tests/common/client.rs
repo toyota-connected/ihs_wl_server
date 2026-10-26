@@ -38,6 +38,9 @@ use wayland_protocols::wp::linux_drm_syncobj::v1::client::{
     wp_linux_drm_syncobj_timeline_v1,
 };
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+use wayland_protocols::wp::security_context::v1::client::{
+    wp_security_context_manager_v1, wp_security_context_v1,
+};
 use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1;
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xdg_activation_v1};
@@ -78,6 +81,8 @@ struct App {
     /// wl_buffer.release events, by the client's buffer index.
     released: HashMap<usize, u32>,
     frames_done: u32,
+    /// The last frame callback's time (callback_data), in milliseconds.
+    frame_time_ms: Option<u32>,
     presentation: Option<wp_presentation::WpPresentation>,
     presentation_clock: Option<u32>,
     fifo_manager: Option<wp_fifo_manager_v1::WpFifoManagerV1>,
@@ -105,6 +110,7 @@ struct App {
     /// The serial of the last wl_pointer.enter.
     enter_serial: Option<u32>,
     cursor_shape_manager: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
+    security_context_manager: Option<wp_security_context_manager_v1::WpSecurityContextManagerV1>,
     activation: Option<xdg_activation_v1::XdgActivationV1>,
     single_pixel: Option<wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1>,
     /// The last xdg_activation_token_v1.done.
@@ -274,6 +280,37 @@ impl Client {
 
     pub fn globals(&self) -> &[String] {
         &self.app.globals
+    }
+
+    /// Make a sandbox listener at @p socket_name under `XDG_RUNTIME_DIR`, the
+    /// way a sandbox engine does, tagged with @p app_id. Returns the write end
+    /// of its close pipe: the listener stops when that is dropped.
+    pub fn create_security_context(
+        &mut self,
+        socket_name: &str,
+        sandbox_engine: &str,
+        app_id: &str,
+        instance_id: &str,
+    ) -> std::io::PipeWriter {
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR");
+        let path = PathBuf::from(dir).join(socket_name);
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let (close_read, close_write) = std::io::pipe().unwrap();
+        let qh = self.queue.handle();
+        let manager = self
+            .app
+            .security_context_manager
+            .as_ref()
+            .expect("wp_security_context_manager_v1");
+        let context = manager.create_listener(listener.as_fd(), close_read.as_fd(), &qh, ());
+        context.set_sandbox_engine(sandbox_engine.into());
+        context.set_app_id(app_id.into());
+        context.set_instance_id(instance_id.into());
+        context.commit();
+        context.destroy();
+        self.roundtrip();
+        close_write
     }
 
     /// Create a toplevel, wait for its configure, attach a buffer, commit.
@@ -518,6 +555,10 @@ impl Client {
         self.app.frames_done
     }
 
+    pub fn frame_time_ms(&self) -> Option<u32> {
+        self.app.frame_time_ms
+    }
+
     pub fn configure_size(&self) -> Option<(i32, i32)> {
         self.app.configure_size
     }
@@ -699,6 +740,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wp_cursor_shape_manager_v1" => {
                     app.cursor_shape_manager = Some(registry.bind(name, 1, qh, ()))
                 }
+                "wp_security_context_manager_v1" => {
+                    app.security_context_manager = Some(registry.bind(name, 1, qh, ()))
+                }
                 "wl_output" => {
                     registry.bind::<wayland_client::protocol::wl_output::WlOutput, _, _>(
                         name,
@@ -750,6 +794,8 @@ delegate_noop!(App: ignore wayland_client::protocol::wl_output::WlOutput);
 delegate_noop!(App: ignore wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(App: ignore wp_viewporter::WpViewporter);
 delegate_noop!(App: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
+delegate_noop!(App: ignore wp_security_context_manager_v1::WpSecurityContextManagerV1);
+delegate_noop!(App: ignore wp_security_context_v1::WpSecurityContextV1);
 delegate_noop!(App: ignore xdg_activation_v1::XdgActivationV1);
 delegate_noop!(App: ignore wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1);
 
@@ -887,8 +933,9 @@ impl Dispatch<wl_callback::WlCallback, ()> for App {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_callback::Event::Done { .. } = event {
+        if let wl_callback::Event::Done { callback_data } = event {
             app.frames_done += 1;
+            app.frame_time_ms = Some(callback_data);
         }
     }
 }
