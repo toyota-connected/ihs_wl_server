@@ -43,6 +43,13 @@ final List<String> _sandboxAppIds =
 /// The size the Scale button asks the client for.
 const Size _fixedSize = Size(800, 600);
 
+/// What the Zoom chip draws the view at, in turn: (x, y).
+const List<(double, double)> _zooms = <(double, double)>[
+  (1, 1),
+  (0.5, 0.5),
+  (0.5, 0.75),
+];
+
 Future<void> main() async {
   final WaylandServer server = WaylandServer.start();
   final String launch = Platform.environment['LAUNCH'] ?? '';
@@ -118,6 +125,12 @@ class _ClientPageState extends State<ClientPage> {
   bool _minimized = false;
   bool _scaled = false;
 
+  /// Index into [_zooms].
+  int _zoom = 0;
+
+  /// The view's sizeOnScreen.
+  bool _sizeOnScreen = true;
+
   @override
   void initState() {
     super.initState();
@@ -166,7 +179,9 @@ class _ClientPageState extends State<ClientPage> {
       sandboxAppId: widget.sandboxAppId,
       controller: _controller,
       requestedSize: _scaled ? _fixedSize : null,
+      sizeOnScreen: _sizeOnScreen,
     );
+    final (double zoomX, double zoomY) = _zooms[_zoom];
     return Scaffold(
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -177,7 +192,17 @@ class _ClientPageState extends State<ClientPage> {
               children: <Widget>[
                 // Off screen while minimized: the shell suspends the view,
                 // and the client is told it is.
-                Offstage(offstage: _minimized, child: view),
+                Offstage(
+                  offstage: _minimized,
+                  // Drawn scaled by an ancestor: the client is sized as the
+                  // view is on screen, or with sizeOnScreen off asked for
+                  // its layout size and scaled to fit.
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.diagonal3Values(zoomX, zoomY, 1),
+                    child: view,
+                  ),
+                ),
                 if (_minimized)
                   Center(
                     child: FilledButton(
@@ -214,6 +239,18 @@ class _ClientPageState extends State<ClientPage> {
                 ),
                 selected: _scaled,
                 onSelected: (bool on) => setState(() => _scaled = on),
+              ),
+              const SizedBox(width: 8),
+              ActionChip(
+                label: Text('Zoom ${_zooms[_zoom].$1}x${_zooms[_zoom].$2}'),
+                onPressed: () =>
+                    setState(() => _zoom = (_zoom + 1) % _zooms.length),
+              ),
+              const SizedBox(width: 8),
+              FilterChip(
+                label: const Text('On-screen size'),
+                selected: _sizeOnScreen,
+                onSelected: (bool on) => setState(() => _sizeOnScreen = on),
               ),
               const SizedBox(width: 8),
               FilledButton.tonal(
