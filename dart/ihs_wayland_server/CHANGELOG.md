@@ -9,9 +9,9 @@
   states the app grants, `close()`). A view follows its layout size, and a
   window larger than asked is scaled down to fit. A view an ancestor draws
   scaled (a `FittedBox`, a `Transform`) is sized, and takes input, as it is
-  on screen. `sandboxAppId` binds only a client in that sandbox (a flatpak
-  app id), and a sandboxed client matches `appId` only when it is its
-  sandbox's.
+  on screen, unless `sizeOnScreen` is false. `sandboxAppId` binds only a
+  client in that sandbox (a flatpak app id), and a sandboxed client matches
+  `appId` only when it is its sandbox's.
 - Build hook builds libihs_wl_server from the repository into the app's
   bundle, or uses the installed library (`system_library`, or when not inside
   the repository). The bundled copy is loaded first.

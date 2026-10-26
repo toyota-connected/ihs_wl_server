@@ -134,38 +134,45 @@ void main() {
   }
 
   /// A 200x100 view, drawn into [width]x[height] on screen.
-  Widget fitted(double width, double height) => WidgetsApp(
-    color: const Color(0xff000000),
-    builder: (BuildContext context, Widget? child) => Center(
-      child: SizedBox(
-        width: width,
-        height: height,
-        child: const FittedBox(
-          fit: BoxFit.fill,
+  Widget fitted(double width, double height, {bool sizeOnScreen = true}) =>
+      WidgetsApp(
+        color: const Color(0xff000000),
+        builder: (BuildContext context, Widget? child) => Center(
           child: SizedBox(
-            width: 200,
-            height: 100,
-            child: WaylandToplevelView(),
+            width: width,
+            height: height,
+            child: FittedBox(
+              fit: BoxFit.fill,
+              child: SizedBox(
+                width: 200,
+                height: 100,
+                child: WaylandToplevelView(sizeOnScreen: sizeOnScreen),
+              ),
+            ),
           ),
         ),
-      ),
-    ),
-  );
+      );
 
-  Future<void> expectInput(WidgetTester tester, Offset at) async {
+  /// Input at [at] on screen over the view reaches the client at [sent].
+  Future<void> expectInput(
+    WidgetTester tester,
+    Offset at, [
+    Offset? sent,
+  ]) async {
+    sent ??= at;
     final Offset origin = tester.getTopLeft(find.byType(WaylandToplevelView));
 
     final TestGesture mouse = await tester.createGesture(
       kind: PointerDeviceKind.mouse,
     );
-    await mouse.addPointer(location: origin + at);
-    await mouse.moveTo(origin + at + const Offset(1, 0));
+    await mouse.addPointer(location: origin);
+    await mouse.moveTo(origin + at);
     await mouse.removePointer();
-    expect(module.motion.last, at + const Offset(1, 0));
+    expect(module.motion.last, sent);
 
     final TestGesture finger = await tester.startGesture(origin + at);
     await finger.up();
-    expect(module.touch.single, at);
+    expect(module.touch.single, sent);
 
     tester.binding.handlePointerEvent(
       PointerScrollEvent(
@@ -234,5 +241,21 @@ void main() {
     await tester.pump();
     expect(sizeOf(calls.single), (200.0, 100.0));
     await expectInput(tester, const Offset(20, 60));
+  });
+
+  testWidgets('sizeOnScreen false: as laid out, and back at run time', (
+    WidgetTester tester,
+  ) async {
+    mockPlatformViews(tester);
+    await tester.pumpWidget(fitted(400, 300, sizeOnScreen: false));
+    await tester.pump();
+    expect(sizeOf(calls.single), (200.0, 100.0));
+    // In the view's layout: (20, 60) on screen is (10, 20) there.
+    await expectInput(tester, const Offset(20, 60), const Offset(10, 20));
+
+    await tester.pumpWidget(fitted(400, 300));
+    await tester.pump();
+    expect(calls.map((MethodCall c) => c.method), <String>['create', 'resize']);
+    expect(sizeOf(calls.last), (400.0, 300.0));
   });
 }

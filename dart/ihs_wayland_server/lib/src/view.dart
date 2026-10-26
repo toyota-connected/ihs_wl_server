@@ -46,7 +46,8 @@ const String _viewType = 'ihs_wl/toplevel';
 /// A view an ancestor draws scaled (a [FittedBox], a [Transform.scale]) is
 /// sized, and takes input, as it is on screen: the shell draws the client's
 /// buffers into the view's rect on screen, so the client renders at 1:1
-/// there rather than at the size of the app's layout.
+/// there rather than at the size of the app's layout. With [sizeOnScreen]
+/// false it is sized as laid out, and the shell scales what it draws.
 ///
 /// A [controller] reports whether a toplevel is shown and the window-state
 /// changes its client asks for, and asks the client to close.
@@ -65,6 +66,7 @@ class WaylandToplevelView extends StatefulWidget {
     this.controller,
     this.focusNode,
     this.autofocus = false,
+    this.sizeOnScreen = true,
   });
 
   /// The token the client was launched with.
@@ -86,6 +88,10 @@ class WaylandToplevelView extends StatefulWidget {
   /// Keyboard focus for the client; one is made when null.
   final FocusNode? focusNode;
   final bool autofocus;
+
+  /// Size the client as the view is on screen when an ancestor draws it
+  /// scaled, rather than as laid out. May change at any time.
+  final bool sizeOnScreen;
 
   @override
   State<WaylandToplevelView> createState() => _WaylandToplevelViewState();
@@ -114,8 +120,11 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
 
   void _onScale(Offset scale) {
     _scale = scale;
-    _view?.drawnAt(scale);
+    _view?.drawnAt(widget.sizeOnScreen ? scale : _unscaled);
   }
+
+  /// The scale the client is sized for: none unless [sizeOnScreen].
+  Offset? get _effectiveScale => widget.sizeOnScreen ? _scale : _unscaled;
 
   @override
   void dispose() {
@@ -185,6 +194,10 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   @override
   void didUpdateWidget(WaylandToplevelView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final Offset? scale = _effectiveScale;
+    if (widget.sizeOnScreen != oldWidget.sizeOnScreen && scale != null) {
+      _view?.drawnAt(scale);
+    }
     if (widget.controller != oldWidget.controller) {
       oldWidget.controller?._attach(null, false);
       widget.controller?._attach(_viewId, _bound);
@@ -297,7 +310,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                       // the view is created at its real size rather than 0x0.
                       return _view = _ToplevelViewController(
                         id: params.id,
-                        scale: _scale,
+                        scale: _effectiveScale,
                         creationParams: <String, Object?>{
                           'token': widget.activationToken,
                           'app_id': widget.appId,
