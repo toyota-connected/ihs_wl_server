@@ -47,7 +47,8 @@ const String _viewType = 'ihs_wl/toplevel';
 /// sized, and takes input, as it is on screen: the shell draws the client's
 /// buffers into the view's rect on screen, so the client renders at 1:1
 /// there rather than at the size of the app's layout. With [sizeOnScreen]
-/// false it is sized as laid out, and the shell scales what it draws.
+/// false it is asked for the size it is laid out at, as with a
+/// [requestedSize], and scaled to fit.
 ///
 /// A [controller] reports whether a toplevel is shown and the window-state
 /// changes its client asks for, and asks the client to close.
@@ -90,7 +91,9 @@ class WaylandToplevelView extends StatefulWidget {
   final bool autofocus;
 
   /// Size the client as the view is on screen when an ancestor draws it
-  /// scaled, rather than as laid out. May change at any time.
+  /// scaled. False asks it for the size the view is laid out at, scaled to
+  /// fit the view on screen, aspect kept, centered; a [requestedSize] comes
+  /// first. May change at any time.
   final bool sizeOnScreen;
 
   @override
@@ -118,13 +121,31 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   /// The scale the view is drawn at on screen, once measured.
   Offset? _scale;
 
+  /// The size the view was last laid out at.
+  Size? _layoutSize;
+
   void _onScale(Offset scale) {
     _scale = scale;
-    _view?.drawnAt(widget.sizeOnScreen ? scale : _unscaled);
+    _view?.drawnAt(scale);
   }
 
-  /// The scale the client is sized for: none unless [sizeOnScreen].
-  Offset? get _effectiveScale => widget.sizeOnScreen ? _scale : _unscaled;
+  void _onLayout(Size size) {
+    _layoutSize = size;
+    if (!widget.sizeOnScreen && widget.requestedSize == null) {
+      _sendRequestedSize();
+    }
+  }
+
+  /// The size to ask the client for instead of the view's on screen.
+  Size? get _requestedSize =>
+      widget.requestedSize ?? (widget.sizeOnScreen ? null : _layoutSize);
+
+  void _sendRequestedSize() {
+    final int? id = _viewId;
+    if (id != null) {
+      waylandInput?.requestSize(id, _requestedSize);
+    }
+  }
 
   @override
   void dispose() {
@@ -178,7 +199,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
     _sendController(id);
     // The creation params carry the size the view was built with; this one
     // may have changed since.
-    waylandInput?.requestSize(id, widget.requestedSize);
+    _sendRequestedSize();
     if (_focus.hasFocus) {
       waylandInput?.focus(id, true);
     }
@@ -194,10 +215,6 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
   @override
   void didUpdateWidget(WaylandToplevelView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final Offset? scale = _effectiveScale;
-    if (widget.sizeOnScreen != oldWidget.sizeOnScreen && scale != null) {
-      _view?.drawnAt(scale);
-    }
     if (widget.controller != oldWidget.controller) {
       oldWidget.controller?._attach(null, false);
       widget.controller?._attach(_viewId, _bound);
@@ -206,9 +223,9 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
         _sendController(id);
       }
     }
-    final int? id = _viewId;
-    if (id != null && widget.requestedSize != oldWidget.requestedSize) {
-      waylandInput?.requestSize(id, widget.requestedSize);
+    if (widget.requestedSize != oldWidget.requestedSize ||
+        widget.sizeOnScreen != oldWidget.sizeOnScreen) {
+      _sendRequestedSize();
     }
   }
 
@@ -276,6 +293,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                 // is created: the surface is built only after.
                 _ScaleListener(
                   onScale: _onScale,
+                  onLayout: _onLayout,
                   child: PlatformViewLink(
                     viewType: _viewType,
                     surfaceFactory:
@@ -310,7 +328,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                       // the view is created at its real size rather than 0x0.
                       return _view = _ToplevelViewController(
                         id: params.id,
-                        scale: _effectiveScale,
+                        scale: _scale,
                         creationParams: <String, Object?>{
                           'token': widget.activationToken,
                           'app_id': widget.appId,
@@ -319,8 +337,8 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                           'capabilities':
                               widget.controller?._capabilityBits ?? 0,
                           'window_state': widget.controller?._stateBits ?? 0,
-                          'requested_width': widget.requestedSize?.width,
-                          'requested_height': widget.requestedSize?.height,
+                          'requested_width': _requestedSize?.width,
+                          'requested_height': _requestedSize?.height,
                         },
                         onCreated: (int id) {
                           _created(id);
@@ -547,36 +565,55 @@ class _RenderLayoutListener extends RenderProxyBox {
 
 /// Reports the scale it is drawn at on screen, per axis: logical pixels on
 /// screen per logical pixel of its layout. After its first frame, then
-/// after every frame that changes it.
+/// after every frame that changes it. And its size after every layout that
+/// changes it.
 ///
 /// After every frame, not at paint: an ancestor's transform can change
 /// without this box repainting (a RepaintBoundary between them, an animated
 /// Transform), and a FittedBox sets its scale only after laying out its
 /// child.
 class _ScaleListener extends SingleChildRenderObjectWidget {
-  const _ScaleListener({required this.onScale, required super.child});
+  const _ScaleListener({
+    required this.onScale,
+    required this.onLayout,
+    required super.child,
+  });
 
   final ValueChanged<Offset> onScale;
+  final ValueChanged<Size> onLayout;
 
   @override
   _RenderScaleListener createRenderObject(BuildContext context) =>
-      _RenderScaleListener(onScale);
+      _RenderScaleListener(onScale, onLayout);
 
   @override
   void updateRenderObject(
     BuildContext context,
     _RenderScaleListener renderObject,
   ) {
-    renderObject.onScale = onScale;
+    renderObject
+      ..onScale = onScale
+      ..onLayout = onLayout;
   }
 }
 
 class _RenderScaleListener extends RenderProxyBox {
-  _RenderScaleListener(this.onScale);
+  _RenderScaleListener(this.onScale, this.onLayout);
 
   ValueChanged<Offset> onScale;
+  ValueChanged<Size> onLayout;
   Offset? _last;
+  Size? _lastSize;
   bool _checking = false;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    if (size != _lastSize) {
+      _lastSize = size;
+      onLayout(size);
+    }
+  }
 
   @override
   void attach(PipelineOwner owner) {

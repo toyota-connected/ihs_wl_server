@@ -35,7 +35,7 @@ class _Module {
       'ihs_wl_view_size',
       ffi.NativeCallable<
         ffi.Int Function(ffi.Int32, ffi.Double, ffi.Double)
-      >.isolateLocal(_ok3, exceptionalReturn: -1),
+      >.isolateLocal(_viewSize, exceptionalReturn: -1),
     );
     for (final String name in <String>[
       'ihs_wl_focus',
@@ -60,6 +60,9 @@ class _Module {
 
   /// Scroll: (axis_x, axis_y).
   final List<Offset> axis = <Offset>[];
+
+  /// Sizes asked of the client (ihs_wl_view_size); null for the view's.
+  final List<Size?> requested = <Size?>[];
 
   /// Touch down and motion: (x, y).
   final List<Offset> touch = <Offset>[];
@@ -100,7 +103,10 @@ class _Module {
   }
 
   static int _ok2(int view, int value) => 0;
-  static int _ok3(int view, double a, double b) => 0;
+  int _viewSize(int view, double width, double height) {
+    requested.add(width == 0 && height == 0 ? null : Size(width, height));
+    return 0;
+  }
 }
 
 void main() {
@@ -153,13 +159,8 @@ void main() {
         ),
       );
 
-  /// Input at [at] on screen over the view reaches the client at [sent].
-  Future<void> expectInput(
-    WidgetTester tester,
-    Offset at, [
-    Offset? sent,
-  ]) async {
-    sent ??= at;
+  /// Input at [at] on screen over the view reaches the client there.
+  Future<void> expectInput(WidgetTester tester, Offset at) async {
     final Offset origin = tester.getTopLeft(find.byType(WaylandToplevelView));
 
     final TestGesture mouse = await tester.createGesture(
@@ -168,11 +169,11 @@ void main() {
     await mouse.addPointer(location: origin);
     await mouse.moveTo(origin + at);
     await mouse.removePointer();
-    expect(module.motion.last, sent);
+    expect(module.motion.last, at);
 
     final TestGesture finger = await tester.startGesture(origin + at);
     await finger.up();
-    expect(module.touch.single, sent);
+    expect(module.touch.single, at);
 
     tester.binding.handlePointerEvent(
       PointerScrollEvent(
@@ -243,19 +244,25 @@ void main() {
     await expectInput(tester, const Offset(20, 60));
   });
 
-  testWidgets('sizeOnScreen false: as laid out, and back at run time', (
+  testWidgets('sizeOnScreen false: asks for the layout size, at run time', (
     WidgetTester tester,
   ) async {
     mockPlatformViews(tester);
     await tester.pumpWidget(fitted(400, 300, sizeOnScreen: false));
     await tester.pump();
-    expect(sizeOf(calls.single), (200.0, 100.0));
-    // In the view's layout: (20, 60) on screen is (10, 20) there.
-    await expectInput(tester, const Offset(20, 60), const Offset(10, 20));
+    // The view as it is on screen, and the client asked for its layout
+    // size: the server scales it to fit and maps input back.
+    expect(sizeOf(calls.single), (400.0, 300.0));
+    expect(module.requested.last, const Size(200, 100));
+    await expectInput(tester, const Offset(20, 60));
 
     await tester.pumpWidget(fitted(400, 300));
     await tester.pump();
-    expect(calls.map((MethodCall c) => c.method), <String>['create', 'resize']);
-    expect(sizeOf(calls.last), (400.0, 300.0));
+    expect(module.requested.last, isNull);
+    expect(calls, hasLength(1));
+
+    await tester.pumpWidget(fitted(400, 300, sizeOnScreen: false));
+    await tester.pump();
+    expect(module.requested.last, const Size(200, 100));
   });
 }
