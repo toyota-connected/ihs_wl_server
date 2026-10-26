@@ -1,0 +1,151 @@
+# SPDX-FileCopyrightText: 2026 Toyota Connected North America
+# SPDX-License-Identifier: Apache-2.0
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The shell's shared library the crate links: platform-view ABI 1.16 or
+  # newer.
+  IHS_REF: v3.0
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev cmake ninja-build pkg-config \
+            libgbm-dev libdrm-dev libxkbcommon-dev libwayland-dev libegl-dev
+
+      - name: Build + install libihs_shared
+        run: |
+          git clone --depth 1 -b "$IHS_REF" \
+            https://github.com/toyota-connected/ivi-homescreen.git "$RUNNER_TEMP/ihs"
+          cmake -S "$RUNNER_TEMP/ihs/shared" -B "$RUNNER_TEMP/ihs-build" -G Ninja \
+            -DENABLE_DLT=OFF -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build "$RUNNER_TEMP/ihs-build"
+          sudo cmake --install "$RUNNER_TEMP/ihs-build"
+          sudo ldconfig
+
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Runtime dir
+        run: |
+          mkdir -m 700 -p "$RUNNER_TEMP/xdg"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"
+
+      - name: fmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --features egl-wl-display -- -D warnings
+
+      - name: test
+        run: |
+          cargo test --locked
+          cargo test --locked --features egl-wl-display
+
+      - name: C header in sync
+        run: |
+          cargo install --locked cbindgen
+          cbindgen --config cbindgen.toml --output include/ihs_wl.h
+          git diff --exit-code include/
+
+      - name: cargo deny
+        run: |
+          cargo install --locked cargo-deny
+          cargo deny check
+
+  dart:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: dart/ihs_wayland_server
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install build deps
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev cmake ninja-build pkg-config \
+            libgbm-dev libdrm-dev libxkbcommon-dev
+
+      - name: Build + install libihs_shared
+        working-directory: .
+        run: |
+          git clone --depth 1 -b "$IHS_REF" \
+            https://github.com/toyota-connected/ivi-homescreen.git "$RUNNER_TEMP/ihs"
+          cmake -S "$RUNNER_TEMP/ihs/shared" -B "$RUNNER_TEMP/ihs-build" -G Ninja \
+            -DENABLE_DLT=OFF -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build "$RUNNER_TEMP/ihs-build"
+          sudo cmake --install "$RUNNER_TEMP/ihs-build"
+          sudo ldconfig
+
+      - name: Toolchain (rust-toolchain.toml)
+        working-directory: .
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Flutter (stable)
+        working-directory: .
+        run: |
+          git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
+      - name: Runtime dir
+        run: |
+          mkdir -m 700 -p "$RUNNER_TEMP/xdg"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"
+
+      - name: analyze
+        run: flutter analyze
+
+      - name: format
+        run: dart format --output=none --set-exit-if-changed lib hook test example/lib
+
+      - name: Dart bindings in sync
+        run: |
+          dart run ffigen --config ffigen.yaml \
+            --compiler-opts "-I$(clang -print-resource-dir)/include"
+          dart format lib/src/bindings.g.dart
+          git diff --exit-code lib/src/bindings.g.dart
+
+      # Builds libihs_wl_server through the package's build hook.
+      - name: test
+        run: flutter test
+
+      - name: pana
+        run: |
+          dart pub global activate pana
+          pana --no-warning --exit-code-threshold 0 .
