@@ -11,7 +11,7 @@ use smithay::wayland::shell::xdg::{
 
 use crate::observe::{self, Observed};
 use crate::state::{app_id_and_title, State, Toplevels};
-use crate::{IhsWlCapability, IhsWlViewEvent};
+use crate::{IhsWlCapability, IhsWlToplevelEvent, IhsWlViewEvent};
 
 impl State {
     /// The view showing toplevel @p surface, if one does and its app
@@ -73,6 +73,12 @@ impl XdgShellHandler for State {
         let dialog_view = surface
             .parent()
             .and_then(|_| self.bound_view_of(surface.wl_surface()));
+        // Unmapped only, no Changed for the unbind.
+        let window = self
+            .toplevels
+            .by_id
+            .get_mut(&id)
+            .is_some_and(|t| std::mem::take(&mut t.window));
         self.unbind_toplevel(id);
         if let Some(entry) = self.toplevels.by_id.remove(&id) {
             if entry.mapped {
@@ -81,6 +87,9 @@ impl XdgShellHandler for State {
                 observe::emit(Observed::ToplevelUnmapped { app_id });
             }
         }
+        if window {
+            crate::events::post_toplevel(IhsWlToplevelEvent::Unmapped, id);
+        }
         if let Some(view_id) = dialog_view {
             // Its layers go, and the keyboard goes back to what is below.
             self.submit_view(view_id);
@@ -88,7 +97,22 @@ impl XdgShellHandler for State {
         }
     }
 
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = Toplevels::id_of(surface.wl_surface()) {
+            self.window_changed(id);
+        }
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = Toplevels::id_of(surface.wl_surface()) {
+            self.window_changed(id);
+        }
+    }
+
     fn parent_changed(&mut self, surface: ToplevelSurface) {
+        if let Some(id) = Toplevels::id_of(surface.wl_surface()) {
+            self.refresh_window(id);
+        }
         // Now a dialog of another view, or none: show it where it belongs.
         let views: Vec<i32> = self.views.keys().copied().collect();
         for view_id in views {

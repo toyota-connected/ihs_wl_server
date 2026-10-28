@@ -25,6 +25,7 @@ mod error;
 mod events;
 #[doc(hidden)]
 pub mod ffi;
+mod flatpak;
 #[doc(hidden)]
 pub mod gbm_buffer;
 mod handlers;
@@ -106,6 +107,25 @@ pub enum IhsWlViewEvent {
     FullscreenRequested = 6,
     /// The client asked to leave fullscreen.
     UnfullscreenRequested = 7,
+}
+
+/// Window events, posted to the event port as `[event, toplevel_id]`. A
+/// window is a toplevel without a parent; dialogs are not posted. Values do
+/// not overlap `IhsWlViewEvent`'s.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IhsWlToplevelEvent {
+    /// A window mapped, or a dialog lost its parent.
+    Mapped = 256,
+    /// Its app_id, title or the view showing it changed.
+    Changed = 257,
+    /// It closed, or became a dialog.
+    Unmapped = 258,
+    /// Its client asks for it to be shown, with a token the focused client
+    /// made for user input and still has focus.
+    ActivationRequested = 259,
+    /// Its client asks for it to be shown, with any other token.
+    AttentionRequested = 260,
 }
 
 /// Window-state changes the app handles for a view, as bits of
@@ -221,6 +241,44 @@ pub struct IhsWlClientInfo {
     pub sandbox_app_id: [c_char; 256],
     /// The running instance of the app.
     pub sandbox_instance_id: [c_char; 256],
+    /// From the client's `/.flatpak-info`, with or without a security
+    /// context; empty outside flatpak. A client outside any sandbox can
+    /// stage its own, so only `sandboxed` vouches for it.
+    pub flatpak_app_id: [c_char; 256],
+    pub flatpak_instance_id: [c_char; 256],
+}
+
+/// A window, as `ihs_wl_toplevel_info` reports it. Strings are
+/// NUL-terminated; an unset one is empty.
+#[repr(C)]
+pub struct IhsWlToplevelInfo {
+    /// `sizeof(IhsWlToplevelInfo)`.
+    pub struct_size: usize,
+    /// The view showing it, or -1 while none does.
+    pub view_id: i32,
+    /// As the client set them; truncated to fit.
+    pub app_id: [c_char; 256],
+    pub title: [c_char; 256],
+    /// Its client, as in `IhsWlClientInfo`.
+    pub pid: i32,
+    pub uid: u32,
+    pub gid: u32,
+    pub sandboxed: bool,
+    pub sandbox_engine: [c_char; 256],
+    pub sandbox_app_id: [c_char; 256],
+    pub sandbox_instance_id: [c_char; 256],
+    pub flatpak_app_id: [c_char; 256],
+    pub flatpak_instance_id: [c_char; 256],
+}
+
+/// A window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToplevelInfo {
+    /// The view showing it.
+    pub view: Option<i32>,
+    pub app_id: String,
+    pub title: String,
+    pub client: ClientInfo,
 }
 
 /// Who a view's client is.
@@ -231,6 +289,15 @@ pub struct ClientInfo {
     pub gid: u32,
     /// Set when it connected through a security context.
     pub sandbox: Option<Sandbox>,
+    /// From the client's `/.flatpak-info`.
+    pub flatpak: Option<FlatpakApp>,
+}
+
+/// A flatpak app, as its sandbox's `/.flatpak-info` names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlatpakApp {
+    pub app_id: String,
+    pub instance_id: Option<String>,
 }
 
 /// The security context a client connected through, as its sandbox engine
@@ -384,40 +451,139 @@ pub unsafe extern "C" fn ihs_wl_activation_token(out: *mut c_char, cap: usize) -
 ///
 /// # Safety
 /// `info` must point to a writable `IhsWlClientInfo` whose `struct_size` is
-/// set.
+/// set: at least the size 0.1.0 had, which leaves the flatpak fields out.
 #[no_mangle]
 pub unsafe extern "C" fn ihs_wl_view_client(view_id: i32, info: *mut IhsWlClientInfo) -> c_int {
     guard("ihs_wl_view_client", || {
-        sized("info", info.cast_const())?;
+        const V0_1: usize = std::mem::offset_of!(IhsWlClientInfo, flatpak_app_id);
+        if info.is_null() {
+            return Err(Error::invalid("info is NULL"));
+        }
+        let size = *(info as *const usize);
+        if size < V0_1 {
+            return Err(Error::invalid(format!("info: struct_size {size} < {V0_1}")));
+        }
         let Some(client) = view_client(view_id)? else {
             return Ok(0);
         };
+        // Field by field: the caller's struct may end before the flatpak ones.
+        std::ptr::addr_of_mut!((*info).pid).write(client.pid);
+        std::ptr::addr_of_mut!((*info).uid).write(client.uid);
+        std::ptr::addr_of_mut!((*info).gid).write(client.gid);
+        std::ptr::addr_of_mut!((*info).sandboxed).write(client.sandbox.is_some());
+        copy_sandbox(
+            client.sandbox,
+            &mut *std::ptr::addr_of_mut!((*info).sandbox_engine),
+            &mut *std::ptr::addr_of_mut!((*info).sandbox_app_id),
+            &mut *std::ptr::addr_of_mut!((*info).sandbox_instance_id),
+        );
+        if size >= std::mem::size_of::<IhsWlClientInfo>() {
+            copy_flatpak(
+                client.flatpak,
+                &mut *std::ptr::addr_of_mut!((*info).flatpak_app_id),
+                &mut *std::ptr::addr_of_mut!((*info).flatpak_instance_id),
+            );
+        }
+        Ok(1)
+    })
+}
+
+/// Writes `info` for the window `toplevel_id` and returns 1, or returns 0
+/// once it is gone. Waits for the server thread.
+///
+/// # Safety
+/// `info` must point to a writable `IhsWlToplevelInfo` whose `struct_size`
+/// is set.
+#[no_mangle]
+pub unsafe extern "C" fn ihs_wl_toplevel_info(
+    toplevel_id: i64,
+    info: *mut IhsWlToplevelInfo,
+) -> c_int {
+    guard("ihs_wl_toplevel_info", || {
+        sized("info", info.cast_const())?;
+        let Some(toplevel) = toplevel_info(toplevel_id)? else {
+            return Ok(0);
+        };
         let info = &mut *info;
-        info.pid = client.pid;
-        info.uid = client.uid;
-        info.gid = client.gid;
-        info.sandboxed = client.sandbox.is_some();
-        let sandbox = client.sandbox.unwrap_or(Sandbox {
-            engine: None,
-            app_id: None,
-            instance_id: None,
-        });
-        copy_str(&mut info.sandbox_engine, sandbox.engine.as_deref());
-        copy_str(&mut info.sandbox_app_id, sandbox.app_id.as_deref());
-        copy_str(
+        info.view_id = toplevel.view.unwrap_or(-1);
+        copy_str(&mut info.app_id, Some(&toplevel.app_id));
+        copy_str(&mut info.title, Some(&toplevel.title));
+        info.pid = toplevel.client.pid;
+        info.uid = toplevel.client.uid;
+        info.gid = toplevel.client.gid;
+        info.sandboxed = toplevel.client.sandbox.is_some();
+        copy_sandbox(
+            toplevel.client.sandbox,
+            &mut info.sandbox_engine,
+            &mut info.sandbox_app_id,
             &mut info.sandbox_instance_id,
-            sandbox.instance_id.as_deref(),
+        );
+        copy_flatpak(
+            toplevel.client.flatpak,
+            &mut info.flatpak_app_id,
+            &mut info.flatpak_instance_id,
         );
         Ok(1)
     })
 }
 
-/// Copy @p s into @p out NUL-terminated; the server never holds one longer
-/// than fits (`IDENTITY_MAX`), and a NUL inside ends it there.
+/// Writes up to `cap` window ids, oldest first, to `out` and returns how
+/// many windows there are. Waits for the server thread.
+///
+/// # Safety
+/// `out` must be writable for `cap` ids; it may be NULL when `cap` is 0.
+#[no_mangle]
+pub unsafe extern "C" fn ihs_wl_toplevels(out: *mut i64, cap: usize) -> c_int {
+    guard("ihs_wl_toplevels", || {
+        if out.is_null() && cap > 0 {
+            return Err(Error::invalid("out is null"));
+        }
+        let ids = toplevels()?;
+        for (i, id) in ids.iter().take(cap).enumerate() {
+            *out.add(i) = *id;
+        }
+        Ok(ids.len() as c_int)
+    })
+}
+
+/// Copy @p sandbox's fields, or empty ones without it.
+fn copy_sandbox(
+    sandbox: Option<Sandbox>,
+    engine: &mut [c_char; 256],
+    app_id: &mut [c_char; 256],
+    instance_id: &mut [c_char; 256],
+) {
+    let sandbox = sandbox.unwrap_or(Sandbox {
+        engine: None,
+        app_id: None,
+        instance_id: None,
+    });
+    copy_str(engine, sandbox.engine.as_deref());
+    copy_str(app_id, sandbox.app_id.as_deref());
+    copy_str(instance_id, sandbox.instance_id.as_deref());
+}
+
+/// Copy @p flatpak's fields, or empty ones without it.
+fn copy_flatpak(
+    flatpak: Option<FlatpakApp>,
+    app_id: &mut [c_char; 256],
+    instance_id: &mut [c_char; 256],
+) {
+    copy_str(app_id, flatpak.as_ref().map(|f| f.app_id.as_str()));
+    copy_str(
+        instance_id,
+        flatpak.as_ref().and_then(|f| f.instance_id.as_deref()),
+    );
+}
+
+/// Copy @p s into @p out NUL-terminated, cut at a character boundary.
 fn copy_str(out: &mut [c_char; 256], s: Option<&str>) {
-    let bytes = s.unwrap_or_default().as_bytes();
-    let n = bytes.len().min(out.len() - 1);
-    for (o, b) in out.iter_mut().zip(&bytes[..n]) {
+    let s = s.unwrap_or_default();
+    let mut n = s.len().min(out.len() - 1);
+    while !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    for (o, b) in out.iter_mut().zip(&s.as_bytes()[..n]) {
         *o = *b as c_char;
     }
     out[n] = 0;
@@ -547,11 +713,11 @@ pub extern "C" fn ihs_wl_view_state(view_id: i32, state: u32) -> c_int {
     })
 }
 
-/// Post view events (`IhsWlViewEvent`) from now on to the Dart native port
-/// `port` with `post`, which is `NativeApi.postCObject`; each is a list
-/// `[event, view_id]`. NULL `post` stops. A port whose isolate is gone only
-/// drops them, so after a hot restart the new isolate registers its own.
-/// Any thread.
+/// Post view events (`IhsWlViewEvent`, `[event, view_id]`) and window events
+/// (`IhsWlToplevelEvent`, `[event, toplevel_id]`) from now on to the Dart
+/// native port `port` with `post`, which is `NativeApi.postCObject`. NULL
+/// `post` stops. A port whose isolate is gone only drops them, so after a
+/// hot restart the new isolate registers its own. Any thread.
 #[no_mangle]
 pub extern "C" fn ihs_wl_set_event_port(
     post: Option<unsafe extern "C" fn(port: i64, message: *mut std::ffi::c_void) -> bool>,
@@ -617,4 +783,48 @@ pub fn view_client(view_id: i32) -> Result<Option<ClientInfo>> {
     thread::send(thread::Cmd::ViewClient { view_id, reply: tx })?;
     rx.recv_timeout(std::time::Duration::from_secs(2))
         .map_err(|e| Error::new(IhsWlResult::ErrInternal as i32, format!("no reply: {e}")))
+}
+
+/// The window @p toplevel_id; None once it is gone.
+pub fn toplevel_info(toplevel_id: i64) -> Result<Option<ToplevelInfo>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    thread::send(thread::Cmd::ToplevelInfo {
+        toplevel_id,
+        reply: tx,
+    })?;
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| Error::new(IhsWlResult::ErrInternal as i32, format!("no reply: {e}")))
+}
+
+/// The windows there are now, oldest first.
+pub fn toplevels() -> Result<Vec<i64>> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    thread::send(thread::Cmd::Toplevels(tx))?;
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .map_err(|e| Error::new(IhsWlResult::ErrInternal as i32, format!("no reply: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_str;
+    use std::ffi::CStr;
+
+    #[test]
+    fn copy_str_cuts_at_a_character_boundary() {
+        let mut out = [0; 256];
+        let copied = |out: &[std::ffi::c_char; 256]| {
+            unsafe { CStr::from_ptr(out.as_ptr()) }
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        // 254 bytes, then a 2-byte character that would end at byte 256.
+        let s = format!("{}é", "a".repeat(254));
+        copy_str(&mut out, Some(&s));
+        assert_eq!(copied(&out), "a".repeat(254), "cut before the character");
+        copy_str(&mut out, Some("é"));
+        assert_eq!(copied(&out), "é");
+        copy_str(&mut out, None);
+        assert_eq!(copied(&out), "");
+    }
 }

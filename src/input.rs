@@ -19,8 +19,9 @@ use smithay::input::keyboard::{FilterResult, KeyboardHandle, Keycode, XkbConfig}
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::touch::{self, DownEvent, TouchHandle, UpEvent};
 use smithay::input::Seat;
+use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Serial, SERIAL_COUNTER};
 
 use crate::state::State;
 use crate::{IhsWlPointerEvent, IhsWlPointerKind as P, IhsWlTouchEvent, IhsWlTouchKind as T};
@@ -45,6 +46,11 @@ pub struct Devices {
     /// The pointer left its view mid-click: nothing is under it once the
     /// buttons are up.
     left: bool,
+    /// The last key, button or touch serial sent.
+    pub input_serial: Option<Serial>,
+    /// The client focus is on, and the last input serial when it got it:
+    /// the press that moved focus counts as that client's input.
+    pub focus: Option<(ClientId, Option<Serial>)>,
 }
 
 impl Devices {
@@ -61,6 +67,8 @@ impl Devices {
             touch: seat.add_touch(),
             keyboard,
             left: false,
+            input_serial: None,
+            focus: None,
         }
     }
 }
@@ -142,10 +150,12 @@ impl State {
                     let focus = self.surface_under(view_id, at);
                     motion(self, focus);
                 }
+                let serial = SERIAL_COUNTER.next_serial();
+                self.devices.input_serial = Some(serial);
                 pointer.button(
                     self,
                     &ButtonEvent {
-                        serial: SERIAL_COUNTER.next_serial(),
+                        serial,
                         time,
                         button: ev.button,
                         state: if ev.pressed != 0 {
@@ -203,25 +213,24 @@ impl State {
         match ev.kind {
             k if k == T::Down as u32 => {
                 let focus = self.surface_under(view_id, at);
+                let serial = SERIAL_COUNTER.next_serial();
+                self.devices.input_serial = Some(serial);
                 touch.down(
                     self,
                     focus,
                     &DownEvent {
                         slot,
                         location: at,
-                        serial: SERIAL_COUNTER.next_serial(),
+                        serial,
                         time,
                     },
                 );
             }
-            k if k == T::Up as u32 => touch.up(
-                self,
-                &UpEvent {
-                    slot,
-                    serial: SERIAL_COUNTER.next_serial(),
-                    time,
-                },
-            ),
+            k if k == T::Up as u32 => {
+                let serial = SERIAL_COUNTER.next_serial();
+                self.devices.input_serial = Some(serial);
+                touch.up(self, &UpEvent { slot, serial, time });
+            }
             // The point stays with the surface it went down on.
             k if k == T::Motion as u32 => touch.motion(
                 self,
@@ -245,6 +254,8 @@ impl State {
         let Some(keyboard) = self.devices.keyboard.clone() else {
             return;
         };
+        let serial = SERIAL_COUNTER.next_serial();
+        self.devices.input_serial = Some(serial);
         keyboard.input::<(), _>(
             self,
             Keycode::from(evdev + XKB_OFFSET),
@@ -253,7 +264,7 @@ impl State {
             } else {
                 KeyState::Released
             },
-            SERIAL_COUNTER.next_serial(),
+            serial,
             time_ms(time_us),
             |_, _, _| FilterResult::Forward,
         );
@@ -301,6 +312,10 @@ impl State {
     pub fn refresh_keyboard_focus(&mut self) {
         // The active window follows focus, keyboard or not.
         self.sync_states();
+        let client = self.focused_client();
+        if client.as_ref() != self.devices.focus.as_ref().map(|(c, _)| c) {
+            self.devices.focus = client.map(|c| (c, self.devices.input_serial));
+        }
         let Some(keyboard) = self.devices.keyboard.clone() else {
             return;
         };

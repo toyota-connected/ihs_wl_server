@@ -8,9 +8,11 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'bindings.g.dart';
+import 'client.dart';
 import 'events.dart';
 import 'input.dart';
 import 'loader.dart';
+import 'toplevel.dart';
 
 /// Where views send input: the running server's, if one was started.
 WaylandInput? get waylandInput =>
@@ -37,7 +39,8 @@ class WaylandServerException implements Exception {
 /// The process-wide embedded Wayland server.
 ///
 /// Clients connect to [socketName]. Each toplevel is shown by a
-/// `WaylandToplevelView`, which binds to it by activation token or app_id.
+/// `WaylandToplevelView`, which binds to it by activation token, app_id or
+/// window id.
 class WaylandServer {
   WaylandServer._(this._lib);
 
@@ -152,6 +155,95 @@ class WaylandServer {
       mode: mode,
     );
     return (process: process, token: token);
+  }
+
+  /// Every window's events, whoever launched it, from now on; [toplevels]
+  /// has those already there.
+  Stream<WaylandToplevelEvent> get toplevelEvents =>
+      ViewEvents.toplevels.stream.map(((IhsWlToplevelEvent, int) e) {
+        final (IhsWlToplevelEvent event, int id) = e;
+        return switch (event) {
+          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_MAPPED =>
+            WaylandToplevelEvent(
+              WaylandToplevelEventKind.mapped,
+              id,
+              toplevel(id),
+            ),
+          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_CHANGED =>
+            WaylandToplevelEvent(
+              WaylandToplevelEventKind.changed,
+              id,
+              toplevel(id),
+            ),
+          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_UNMAPPED =>
+            WaylandToplevelEvent(WaylandToplevelEventKind.unmapped, id, null),
+          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED =>
+            WaylandToplevelEvent(
+              WaylandToplevelEventKind.activationRequested,
+              id,
+              toplevel(id),
+            ),
+          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED =>
+            WaylandToplevelEvent(
+              WaylandToplevelEventKind.attentionRequested,
+              id,
+              toplevel(id),
+            ),
+        };
+      });
+
+  /// The window [id]; null once it is gone or the server is stopped.
+  WaylandToplevel? toplevel(int id) => using((Arena arena) {
+    final ffi.Pointer<IhsWlToplevelInfo> info = arena<IhsWlToplevelInfo>();
+    info.ref.struct_size = ffi.sizeOf<IhsWlToplevelInfo>();
+    if (_lib.ihs_wl_toplevel_info(id, info) != 1) {
+      return null;
+    }
+    final IhsWlToplevelInfo i = info.ref;
+    return WaylandToplevel(
+      id: id,
+      appId: cString(i.app_id) ?? '',
+      title: cString(i.title) ?? '',
+      viewId: i.view_id < 0 ? null : i.view_id,
+      client: WaylandClient(
+        pid: i.pid,
+        uid: i.uid,
+        gid: i.gid,
+        sandbox: i.sandboxed
+            ? WaylandSandbox(
+                engine: cString(i.sandbox_engine),
+                appId: cString(i.sandbox_app_id),
+                instanceId: cString(i.sandbox_instance_id),
+              )
+            : null,
+        flatpakAppId: cString(i.flatpak_app_id),
+        flatpakInstanceId: cString(i.flatpak_instance_id),
+      ),
+    );
+  });
+
+  /// The windows there are, oldest first.
+  List<WaylandToplevel> get toplevels {
+    final List<int> ids = using((Arena arena) {
+      int cap = 0;
+      ffi.Pointer<ffi.Int64> out = ffi.nullptr;
+      while (true) {
+        final int n = _lib.ihs_wl_toplevels(out, cap);
+        if (n < 0) {
+          throw _error('ihs_wl_toplevels', n);
+        }
+        if (n == 0) {
+          return <int>[];
+        }
+        if (n <= cap) {
+          return out.asTypedList(n).toList();
+        }
+        // Grown since the count: ask again.
+        cap = n + 8;
+        out = arena<ffi.Int64>(cap);
+      }
+    });
+    return <WaylandToplevel>[for (final int id in ids) ?toplevel(id)];
   }
 
   /// Disconnect every client and stop the server.

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use smithay::desktop::PopupManager;
 use smithay::input::{Seat, SeatState};
@@ -313,6 +314,7 @@ impl State {
         let data = Arc::new(ClientState {
             compositor_state: CompositorClientState::default(),
             security_context,
+            flatpak: crate::flatpak::of_stream(&stream),
             clients: self.clients.clone(),
             gone: self.gone.clone(),
         });
@@ -460,6 +462,19 @@ impl State {
             Cmd::ViewClient { view_id, reply } => {
                 let _ = reply.send(self.view_client_info(view_id));
             }
+            Cmd::ToplevelInfo { toplevel_id, reply } => {
+                let _ = reply.send(self.toplevel_info(toplevel_id));
+            }
+            Cmd::Toplevels(reply) => {
+                let ids = self
+                    .toplevels
+                    .by_id
+                    .iter()
+                    .filter(|(_, t)| t.window)
+                    .map(|(id, _)| *id)
+                    .collect();
+                let _ = reply.send(ids);
+            }
         }
     }
 
@@ -470,7 +485,8 @@ impl State {
     /// with a token, which are for the views naming theirs. A sandboxed
     /// client matches an app_id only when it is its sandbox's. A view naming
     /// a sandbox app_id binds only toplevels of clients in that sandbox,
-    /// which the client cannot claim for itself.
+    /// which the client cannot claim for itself. A view naming a toplevel id
+    /// binds that window only.
     pub fn try_bind_view(&mut self, view_id: i32) {
         let Some(entry) = self.views.get(&view_id) else {
             return;
@@ -482,6 +498,7 @@ impl State {
         let token = params.token.clone();
         let want = params.app_id.clone();
         let sandbox = params.sandbox_app_id.clone();
+        let named = params.toplevel_id;
         let found = self.toplevels.by_id.iter().find_map(|(id, t)| {
             // A dialog is shown with its parent, never on its own.
             if !t.mapped || t.view.is_some() || t.surface.parent().is_some() {
@@ -492,6 +509,10 @@ impl State {
                 if context.and_then(|c| c.app_id).as_ref() != Some(sandbox) {
                     return None;
                 }
+            }
+            // The shell's choice, over any token's reservation.
+            if let Some(named) = named {
+                return (*id == named).then_some(*id);
             }
             if token.is_some() || t.token.is_some() {
                 return (t.token == token).then_some(*id);
@@ -515,6 +536,7 @@ impl State {
         self.toplevels.by_id.get_mut(&toplevel_id).unwrap().view = Some(view_id);
         self.views.get_mut(&view_id).unwrap().toplevel = Some(toplevel_id);
         tracing::info!(view_id, toplevel_id, "view bound");
+        self.window_changed(toplevel_id);
         observe::emit(Observed::ViewBound {
             view_id,
             toplevel_id,
@@ -535,7 +557,70 @@ impl State {
     fn view_client_info(&self, view_id: i32) -> Option<crate::ClientInfo> {
         let toplevel = self.views.get(&view_id)?.toplevel?;
         let surface = self.toplevels.by_id.get(&toplevel)?.surface.wl_surface();
-        let credentials = surface.client()?.get_credentials(&self.dh).ok()?;
+        self.client_info(surface)
+    }
+
+    /// The window @p toplevel_id; None unless it is one.
+    fn toplevel_info(&self, toplevel_id: i64) -> Option<crate::ToplevelInfo> {
+        let t = self.toplevels.by_id.get(&toplevel_id)?;
+        if !t.window {
+            return None;
+        }
+        let surface = t.surface.wl_surface();
+        let (app_id, title) = app_id_and_title(surface);
+        Some(crate::ToplevelInfo {
+            view: t.view,
+            app_id,
+            title,
+            client: self.client_info(surface)?,
+        })
+    }
+
+    /// Post Mapped or Unmapped when @p toplevel_id starts or stops being a
+    /// window: mapped, without a parent.
+    pub fn refresh_window(&mut self, toplevel_id: i64) {
+        let Some(t) = self.toplevels.by_id.get_mut(&toplevel_id) else {
+            return;
+        };
+        let window = t.mapped && t.surface.parent().is_none();
+        if t.surface.parent().is_some() {
+            t.asked = None;
+        }
+        if window == t.window {
+            return;
+        }
+        t.window = window;
+        let event = if window {
+            crate::IhsWlToplevelEvent::Mapped
+        } else {
+            crate::IhsWlToplevelEvent::Unmapped
+        };
+        tracing::debug!(toplevel_id, ?event, "window");
+        crate::events::post_toplevel(event, toplevel_id);
+        if let Some(asked) = t.asked.take().filter(|_| window) {
+            self.ask_to_be_shown(toplevel_id, asked);
+        }
+    }
+
+    /// Tell Dart the window @p toplevel_id changed, if it is one.
+    pub fn window_changed(&self, toplevel_id: i64) {
+        if self
+            .toplevels
+            .by_id
+            .get(&toplevel_id)
+            .is_some_and(|t| t.window)
+        {
+            crate::events::post_toplevel(crate::IhsWlToplevelEvent::Changed, toplevel_id);
+        }
+    }
+
+    /// Who the client of @p surface is.
+    fn client_info(&self, surface: &WlSurface) -> Option<crate::ClientInfo> {
+        let client = surface.client()?;
+        let credentials = client.get_credentials(&self.dh).ok()?;
+        let flatpak = client
+            .get_data::<ClientState>()
+            .and_then(|d| d.flatpak.clone());
         Some(crate::ClientInfo {
             pid: credentials.pid,
             uid: credentials.uid,
@@ -545,6 +630,7 @@ impl State {
                 app_id: c.app_id,
                 instance_id: c.instance_id,
             }),
+            flatpak,
         })
     }
 
@@ -577,6 +663,7 @@ impl State {
                 t.view = None;
             }
             tracing::info!(view_id, toplevel_id, "view unbound");
+            self.window_changed(toplevel_id);
         }
         self.refresh_keyboard_focus();
     }
@@ -719,6 +806,8 @@ pub struct ClientState {
     /// The sandbox the client connected through (wp_security_context_v1), or
     /// `None` on the server's own socket.
     pub security_context: Option<SecurityContext>,
+    /// Read as it connected, before its pid could be reused.
+    flatpak: Option<crate::FlatpakApp>,
     clients: Arc<AtomicU32>,
     gone: Arc<Mutex<Vec<ClientId>>>,
 }
@@ -760,6 +849,12 @@ pub struct ToplevelEntry {
     /// The token it was activated with, one the module issued: it is for
     /// the view naming that token.
     pub token: Option<String>,
+    /// Posted as a window: mapped, without a parent.
+    pub window: bool,
+    /// Asked to be shown before it was a window; considered once it is.
+    pub asked: Option<crate::handlers::activation::Asked>,
+    /// When AttentionRequested was last posted for it.
+    pub attention_at: Option<Instant>,
 }
 
 /// The toplevel id, stored in the surface's data map.
@@ -781,6 +876,9 @@ impl Toplevels {
                 mapped: false,
                 token: None,
                 view: None,
+                window: false,
+                asked: None,
+                attention_at: None,
             },
         );
         id
