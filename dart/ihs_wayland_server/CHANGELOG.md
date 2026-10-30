@@ -1,3 +1,11 @@
+## Unreleased
+
+- `WaylandServer.toplevelEvents` and `toplevels` report every window,
+  whoever launched it, and when one asks to be shown. `toplevelId` binds a
+  view to one, and `WaylandToplevelController.viewId` names the view.
+- `WaylandClient.flatpakAppId` and `flatpakInstanceId` name a flatpak
+  client without a security context too.
+
 ## 0.1.0
 
 - Initial release: `WaylandServer` (start, launch, activation tokens, stop)

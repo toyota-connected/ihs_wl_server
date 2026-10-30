@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:isolate';
 
@@ -8,7 +9,7 @@ import 'bindings.g.dart';
 
 /// View events the server posts to this isolate's port, handed to the view
 /// with that id. Each message is `[event, viewId]`, `event` an
-/// [IhsWlViewEvent] value.
+/// [IhsWlViewEvent] value, or `[event, toplevelId]` for [toplevels].
 ///
 /// A view registers its id before the platform view is created, so a bind
 /// that lands while the create is in flight is not lost. Events for ids no
@@ -20,6 +21,10 @@ final class ViewEvents {
       <int, void Function(IhsWlViewEvent event)>{};
 
   static ReceivePort? _port;
+
+  /// Window events, as `(event, toplevelId)`.
+  static final StreamController<(IhsWlToplevelEvent, int)> toplevels =
+      StreamController<(IhsWlToplevelEvent, int)>.broadcast();
 
   /// Receive events from @p lib's server on this isolate. After a hot
   /// restart the new isolate registers its own port; the old one is gone,
@@ -51,8 +56,12 @@ final class ViewEvents {
       return;
     }
     final Object? event = message[0];
-    final Object? viewId = message[1];
-    if (event is! int || viewId is! int) {
+    final Object? id = message[1];
+    if (event is! int || id is! int) {
+      return;
+    }
+    if (event >= IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_MAPPED.value) {
+      _toplevel(event, id);
       return;
     }
     final IhsWlViewEvent kind;
@@ -62,6 +71,17 @@ final class ViewEvents {
       // A newer server's event this package does not know.
       return;
     }
-    _views[viewId]?.call(kind);
+    _views[id]?.call(kind);
+  }
+
+  static void _toplevel(int event, int toplevelId) {
+    final IhsWlToplevelEvent kind;
+    try {
+      kind = IhsWlToplevelEvent.fromValue(event);
+    } on ArgumentError {
+      // A newer server's event this package does not know.
+      return;
+    }
+    toplevels.add((kind, toplevelId));
   }
 }

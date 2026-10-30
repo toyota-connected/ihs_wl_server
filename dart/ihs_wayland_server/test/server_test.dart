@@ -55,6 +55,18 @@ void main() {
     expect(server.activationToken, throwsA(isA<WaylandServerException>()));
   });
 
+  test('windows: none on a new server, and a query for a gone one', () {
+    final WaylandServer server = WaylandServer.start(
+      socketName: 'ihs-wl-dart-test-toplevels',
+    );
+    expect(server.toplevels, isEmpty);
+    expect(server.toplevel(1), isNull);
+    server.stop();
+    // Stopped: nothing to ask.
+    expect(server.toplevel(1), isNull);
+    expect(() => server.toplevels, throwsA(isA<WaylandServerException>()));
+  });
+
   test('a bad socket name throws with the module error', () {
     expect(
       () => WaylandServer.start(socketName: 'a/b'),

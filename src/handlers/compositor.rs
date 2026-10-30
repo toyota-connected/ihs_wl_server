@@ -183,6 +183,8 @@ impl State {
                 sandbox,
             });
             self.bind_waiting_views();
+            // After binding, so the window's info names its view.
+            self.refresh_window(id);
             // A dialog over a view takes the keyboard from its parent.
             self.refresh_keyboard_focus();
         }

@@ -111,6 +111,9 @@ class WaylandToplevelController extends ChangeNotifier {
   int? _viewId;
   bool _bound = false;
 
+  /// The platform view id, once created.
+  int? get viewId => _viewId;
+
   /// Whether the view shows a toplevel.
   bool get isBound => _bound;
 

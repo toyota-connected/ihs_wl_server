@@ -33,6 +33,9 @@ const String _viewType = 'ihs_wl/toplevel';
 /// over toplevels launched with a token, which are for the views naming
 /// theirs. Until a matching client maps, the view is empty.
 ///
+/// With a [toplevelId] it is that window only, whatever its token or app_id;
+/// once the window is gone the view stays empty.
+///
 /// A client sandboxed by an engine such as flatpak (wp_security_context_v1)
 /// matches [appId] only when it is its sandbox's app id. With a
 /// [sandboxAppId], only a toplevel of a client in that sandbox matches,
@@ -63,6 +66,7 @@ class WaylandToplevelView extends StatefulWidget {
     this.activationToken,
     this.appId,
     this.sandboxAppId,
+    this.toplevelId,
     this.requestedSize,
     this.controller,
     this.focusNode,
@@ -76,6 +80,9 @@ class WaylandToplevelView extends StatefulWidget {
 
   /// The sandbox app id the client must run under, e.g. a flatpak app id.
   final String? sandboxAppId;
+
+  /// A [WaylandToplevel.id].
+  final int? toplevelId;
 
   /// The size to ask the client for, in logical pixels, instead of the
   /// view's. Its content is scaled to fit the view, aspect kept, centered,
@@ -333,6 +340,7 @@ class _WaylandToplevelViewState extends State<WaylandToplevelView> {
                           'token': widget.activationToken,
                           'app_id': widget.appId,
                           'sandbox_app_id': widget.sandboxAppId,
+                          'toplevel_id': widget.toplevelId,
                           'dpr': dpr,
                           'capabilities':
                               widget.controller?._capabilityBits ?? 0,

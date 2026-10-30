@@ -172,6 +172,12 @@ fn sandbox_identity() {
     assert!(!info.sandboxed);
     assert_eq!(text(&info.sandbox_app_id), "");
     assert_eq!(unsafe { ihs_wl_view_client(3, &mut info) }, 0);
+    // Built against 0.1.0: no flatpak fields, which are left alone.
+    info.struct_size = std::mem::offset_of!(IhsWlClientInfo, flatpak_app_id);
+    info.flatpak_app_id[0] = b'x' as std::ffi::c_char;
+    assert_eq!(unsafe { ihs_wl_view_client(1, &mut info) }, 1);
+    assert_eq!(text(&info.sandbox_app_id), APP);
+    assert_eq!(text(&info.flatpak_app_id)[..1], *"x");
     info.struct_size = 8;
     assert_eq!(
         unsafe { ihs_wl_view_client(1, &mut info) },

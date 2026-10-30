@@ -17,7 +17,7 @@ header = """// SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0"""
 
 [export]
-include = ["IhsWlResult", "IhsWlPointerKind", "IhsWlTouchKind", "IhsWlViewEvent", "IhsWlCapability", "IhsWlWindowState"]
+include = ["IhsWlResult", "IhsWlPointerKind", "IhsWlTouchKind", "IhsWlViewEvent", "IhsWlToplevelEvent", "IhsWlCapability", "IhsWlWindowState"]
 exclude = ["Config", "Error", "Result"]
 
 [enum]

@@ -156,6 +156,46 @@ typedef uint32_t IhsWlViewEvent;
 #endif // __cplusplus
 
 /*
+ Window events, posted to the event port as `[event, toplevel_id]`. A
+ window is a toplevel without a parent; dialogs are not posted. Values do
+ not overlap `IhsWlViewEvent`'s.
+ */
+enum IhsWlToplevelEvent
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+  /*
+   A window mapped, or a dialog lost its parent.
+   */
+  IHS_WL_TOPLEVEL_EVENT_MAPPED = 256,
+  /*
+   Its app_id, title or the view showing it changed.
+   */
+  IHS_WL_TOPLEVEL_EVENT_CHANGED = 257,
+  /*
+   It closed, or became a dialog.
+   */
+  IHS_WL_TOPLEVEL_EVENT_UNMAPPED = 258,
+  /*
+   Its client asks for it to be shown, with a token the focused client
+   made for user input and still has focus.
+   */
+  IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED = 259,
+  /*
+   Its client asks for it to be shown, with any other token.
+   */
+  IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED = 260,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum IhsWlToplevelEvent IhsWlToplevelEvent;
+#else
+typedef uint32_t IhsWlToplevelEvent;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/*
  Window-state changes the app handles for a view, as bits of
  `ihs_wl_view_capabilities`. Its client shows the buttons for these (and
  only these: xdg-shell `wm_capabilities`), and its requests for others are
@@ -254,7 +294,46 @@ typedef struct IhsWlClientInfo {
    The running instance of the app.
    */
   char sandbox_instance_id[256];
+  /*
+   From the client's `/.flatpak-info`, with or without a security
+   context; empty outside flatpak. A client outside any sandbox can
+   stage its own, so only `sandboxed` vouches for it.
+   */
+  char flatpak_app_id[256];
+  char flatpak_instance_id[256];
 } IhsWlClientInfo;
+
+/*
+ A window, as `ihs_wl_toplevel_info` reports it. Strings are
+ NUL-terminated; an unset one is empty.
+ */
+typedef struct IhsWlToplevelInfo {
+  /*
+   `sizeof(IhsWlToplevelInfo)`.
+   */
+  size_t struct_size;
+  /*
+   The view showing it, or -1 while none does.
+   */
+  int32_t view_id;
+  /*
+   As the client set them; truncated to fit.
+   */
+  char app_id[256];
+  char title[256];
+  /*
+   Its client, as in `IhsWlClientInfo`.
+   */
+  int32_t pid;
+  uint32_t uid;
+  uint32_t gid;
+  bool sandboxed;
+  char sandbox_engine[256];
+  char sandbox_app_id[256];
+  char sandbox_instance_id[256];
+  char flatpak_app_id[256];
+  char flatpak_instance_id[256];
+} IhsWlToplevelInfo;
 
 /*
  Pointer input, in view-local logical pixels.
@@ -356,9 +435,28 @@ int ihs_wl_activation_token(char *out, size_t cap);
 
  # Safety
  `info` must point to a writable `IhsWlClientInfo` whose `struct_size` is
- set.
+ set: at least the size 0.1.0 had, which leaves the flatpak fields out.
  */
 int ihs_wl_view_client(int32_t view_id, struct IhsWlClientInfo *info);
+
+/*
+ Writes `info` for the window `toplevel_id` and returns 1, or returns 0
+ once it is gone. Waits for the server thread.
+
+ # Safety
+ `info` must point to a writable `IhsWlToplevelInfo` whose `struct_size`
+ is set.
+ */
+int ihs_wl_toplevel_info(int64_t toplevel_id, struct IhsWlToplevelInfo *info);
+
+/*
+ Writes up to `cap` window ids, oldest first, to `out` and returns how
+ many windows there are. Waits for the server thread.
+
+ # Safety
+ `out` must be writable for `cap` ids; it may be NULL when `cap` is 0.
+ */
+int ihs_wl_toplevels(int64_t *out, size_t cap);
 
 /*
  Pointer input for the view `view_id`. Any thread; only enqueues. Returns
@@ -418,11 +516,11 @@ int ihs_wl_view_capabilities(int32_t view_id, uint32_t capabilities);
 int ihs_wl_view_state(int32_t view_id, uint32_t state);
 
 /*
- Post view events (`IhsWlViewEvent`) from now on to the Dart native port
- `port` with `post`, which is `NativeApi.postCObject`; each is a list
- `[event, view_id]`. NULL `post` stops. A port whose isolate is gone only
- drops them, so after a hot restart the new isolate registers its own.
- Any thread.
+ Post view events (`IhsWlViewEvent`, `[event, view_id]`) and window events
+ (`IhsWlToplevelEvent`, `[event, toplevel_id]`) from now on to the Dart
+ native port `port` with `post`, which is `NativeApi.postCObject`. NULL
+ `post` stops. A port whose isolate is gone only drops them, so after a
+ hot restart the new isolate registers its own. Any thread.
  */
 int ihs_wl_set_event_port(bool (*post)(int64_t port, void *message), int64_t port);
 

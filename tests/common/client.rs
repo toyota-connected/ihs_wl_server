@@ -109,6 +109,8 @@ struct App {
     button_serial: Option<u32>,
     /// The serial of the last wl_pointer.enter.
     enter_serial: Option<u32>,
+    /// The serial of the last key, button or touch event.
+    input_serial: Option<u32>,
     cursor_shape_manager: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
     security_context_manager: Option<wp_security_context_manager_v1::WpSecurityContextManagerV1>,
     activation: Option<xdg_activation_v1::XdgActivationV1>,
@@ -364,6 +366,15 @@ impl Client {
 
     /// Create and configure a toplevel with no buffer yet.
     pub fn create_toplevel(&mut self, app_id: &str, title: &str) {
+        self.new_toplevel(app_id, title, None);
+    }
+
+    /// The same, activated with @p token before its first commit.
+    pub fn create_toplevel_activated(&mut self, app_id: &str, title: &str, token: &str) {
+        self.new_toplevel(app_id, title, Some(token));
+    }
+
+    fn new_toplevel(&mut self, app_id: &str, title: &str, token: Option<&str>) {
         let qh = self.queue.handle();
         let surface = self
             .app
@@ -380,6 +391,10 @@ impl Client {
         let toplevel = xdg.get_toplevel(&qh, ());
         toplevel.set_app_id(app_id.into());
         toplevel.set_title(title.into());
+        if let Some(token) = token {
+            let activation = self.app.activation.as_ref().expect("xdg_activation_v1");
+            activation.activate(token.into(), &surface);
+        }
         surface.commit();
         while !self.app.configured {
             self.queue.blocking_dispatch(&mut self.app).unwrap();
@@ -1286,9 +1301,22 @@ impl Client {
 
     /// A token of the client's own making, as for launching another client.
     pub fn client_token(&mut self) -> String {
+        self.make_token(None)
+    }
+
+    /// A token for the last key, button or touch event this client got.
+    pub fn input_token(&mut self) -> String {
+        let serial = self.app.input_serial.expect("no input yet");
+        self.make_token(Some(serial))
+    }
+
+    fn make_token(&mut self, serial: Option<u32>) -> String {
         let qh = self.queue.handle();
         let activation = self.app.activation.as_ref().expect("xdg_activation_v1");
         let token = activation.get_activation_token(&qh, ());
+        if let Some(serial) = serial {
+            token.set_serial(serial, self.app.seat.as_ref().expect("wl_seat"));
+        }
         token.commit();
         self.dispatch_until("activation token", |c| c.app.client_token.is_some());
         token.destroy();
@@ -1409,6 +1437,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
                 ..
             } => {
                 app.button_serial = Some(serial);
+                app.input_serial = Some(serial);
                 Input::Button {
                     button,
                     pressed: matches!(state, Value(wl_pointer::ButtonState::Pressed)),
@@ -1451,13 +1480,18 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
             wl_keyboard::Event::Leave { surface, .. } => Input::KeyLeave {
                 surface: surface.id().protocol_id(),
             },
-            wl_keyboard::Event::Key { key, state, .. } => Input::Key {
-                key,
-                pressed: matches!(
-                    state,
-                    wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed)
-                ),
-            },
+            wl_keyboard::Event::Key {
+                key, state, serial, ..
+            } => {
+                app.input_serial = Some(serial);
+                Input::Key {
+                    key,
+                    pressed: matches!(
+                        state,
+                        wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed)
+                    ),
+                }
+            }
             wl_keyboard::Event::Modifiers { mods_depressed, .. } => Input::Modifiers {
                 depressed: mods_depressed,
             },
@@ -1478,13 +1512,21 @@ impl Dispatch<wl_touch::WlTouch, ()> for App {
     ) {
         let input = match event {
             wl_touch::Event::Down {
-                surface, id, x, y, ..
-            } => Input::TouchDown {
-                surface: surface.id().protocol_id(),
+                surface,
                 id,
                 x,
                 y,
-            },
+                serial,
+                ..
+            } => {
+                app.input_serial = Some(serial);
+                Input::TouchDown {
+                    surface: surface.id().protocol_id(),
+                    id,
+                    x,
+                    y,
+                }
+            }
             wl_touch::Event::Up { id, .. } => Input::TouchUp { id },
             wl_touch::Event::Motion { id, x, y, .. } => Input::TouchMotion { id, x, y },
             wl_touch::Event::Frame => Input::TouchFrame,

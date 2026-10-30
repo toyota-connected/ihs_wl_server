@@ -30,6 +30,9 @@ Early development. Working today:
   connect through it carry the sandbox's engine, app id and instance id, and
   do not see the manager. A view can require the sandbox's app id, and
   `ihs_wl_view_client` reports who a view's client is.
+- Window events (`IhsWlToplevelEvent`) for every toplevel without a parent,
+  whoever launched it; `ihs_wl_toplevel_info` and `ihs_wl_toplevels` describe
+  them, and a view naming a window's id binds it.
 - A view binds to a toplevel by activation token or app_id and configures
   it to the view's size, or to a size the view requests, scaled to fit; a
   window the client makes larger than asked (a minimum size wider than the
@@ -242,7 +245,22 @@ const WaylandToplevelView(sandboxAppId: 'org.gnome.Calculator');
 
 `WaylandToplevelController.client` says who the client shown is: its pid, uid
 and gid, and its sandbox's engine, app id and instance id
-(`ihs_wl_view_client` in the C ABI).
+(`ihs_wl_view_client` in the C ABI). `flatpakAppId` and `flatpakInstanceId`
+come from the client's `/.flatpak-info`, with or without a security context.
+
+Windows the app did not launch get no view of their own.
+`server.toplevelEvents` reports every window and its requests to be shown
+(`activationRequested` when the focused client made the token for user
+input and still has focus, else `attentionRequested`); `server.toplevels` lists the current ones. A view
+naming a window's id shows it:
+
+```dart
+server.toplevelEvents.listen((WaylandToplevelEvent e) {
+  if (e.kind == WaylandToplevelEventKind.mapped && e.toplevel?.viewId == null) {
+    showWindow(WaylandToplevelView(toplevelId: e.id));
+  }
+});
+```
 
 The package's build hook builds the crate with cargo as part of the app's
 build and bundles the library, so there is nothing to build by hand. The

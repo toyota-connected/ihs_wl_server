@@ -91,6 +91,13 @@ pub enum Cmd {
         view_id: i32,
         reply: std::sync::mpsc::SyncSender<Option<crate::ClientInfo>>,
     },
+    /// What the window is, sent back on the channel.
+    ToplevelInfo {
+        toplevel_id: i64,
+        reply: std::sync::mpsc::SyncSender<Option<crate::ToplevelInfo>>,
+    },
+    /// The windows there are, sent back on the channel.
+    Toplevels(std::sync::mpsc::SyncSender<Vec<i64>>),
     /// The shell's scanout hint for a layer of the view (display thread).
     ScanoutHint {
         view_id: i32,

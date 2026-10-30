@@ -79,6 +79,33 @@ class IhsWlBindings {
   late final _ihs_wl_view_client = _ihs_wl_view_clientPtr
       .asFunction<int Function(int, ffi.Pointer<IhsWlClientInfo>)>();
 
+  int ihs_wl_toplevel_info(
+    int toplevel_id,
+    ffi.Pointer<IhsWlToplevelInfo> info,
+  ) {
+    return _ihs_wl_toplevel_info(toplevel_id, info);
+  }
+
+  late final _ihs_wl_toplevel_infoPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Int64, ffi.Pointer<IhsWlToplevelInfo>)
+        >
+      >('ihs_wl_toplevel_info');
+  late final _ihs_wl_toplevel_info = _ihs_wl_toplevel_infoPtr
+      .asFunction<int Function(int, ffi.Pointer<IhsWlToplevelInfo>)>();
+
+  int ihs_wl_toplevels(ffi.Pointer<ffi.Int64> out, int cap) {
+    return _ihs_wl_toplevels(out, cap);
+  }
+
+  late final _ihs_wl_toplevelsPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int Function(ffi.Pointer<ffi.Int64>, ffi.Size)>
+      >('ihs_wl_toplevels');
+  late final _ihs_wl_toplevels = _ihs_wl_toplevelsPtr
+      .asFunction<int Function(ffi.Pointer<ffi.Int64>, int)>();
+
   int ihs_wl_pointer(int view_id, ffi.Pointer<IhsWlPointerEvent> ev) {
     return _ihs_wl_pointer(view_id, ev);
   }
@@ -312,6 +339,26 @@ enum IhsWlViewEvent {
   };
 }
 
+enum IhsWlToplevelEvent {
+  IHS_WL_TOPLEVEL_EVENT_MAPPED(256),
+  IHS_WL_TOPLEVEL_EVENT_CHANGED(257),
+  IHS_WL_TOPLEVEL_EVENT_UNMAPPED(258),
+  IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED(259),
+  IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED(260);
+
+  final int value;
+  const IhsWlToplevelEvent(this.value);
+
+  static IhsWlToplevelEvent fromValue(int value) => switch (value) {
+    256 => IHS_WL_TOPLEVEL_EVENT_MAPPED,
+    257 => IHS_WL_TOPLEVEL_EVENT_CHANGED,
+    258 => IHS_WL_TOPLEVEL_EVENT_UNMAPPED,
+    259 => IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED,
+    260 => IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED,
+    _ => throw ArgumentError('Unknown value for IhsWlToplevelEvent: $value'),
+  };
+}
+
 enum IhsWlCapability {
   IHS_WL_CAPABILITY_MAXIMIZE(1),
   IHS_WL_CAPABILITY_MINIMIZE(2),
@@ -373,6 +420,53 @@ final class IhsWlClientInfo extends ffi.Struct {
 
   @ffi.Array.multi([256])
   external ffi.Array<ffi.Char> sandbox_instance_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> flatpak_app_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> flatpak_instance_id;
+}
+
+final class IhsWlToplevelInfo extends ffi.Struct {
+  @ffi.Size()
+  external int struct_size;
+
+  @ffi.Int32()
+  external int view_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> app_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> title;
+
+  @ffi.Int32()
+  external int pid;
+
+  @ffi.Uint32()
+  external int uid;
+
+  @ffi.Uint32()
+  external int gid;
+
+  @ffi.Bool()
+  external bool sandboxed;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> sandbox_engine;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> sandbox_app_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> sandbox_instance_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> flatpak_app_id;
+
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> flatpak_instance_id;
 }
 
 final class IhsWlPointerEvent extends ffi.Struct {

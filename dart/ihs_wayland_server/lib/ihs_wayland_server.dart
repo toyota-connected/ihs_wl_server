@@ -7,6 +7,8 @@ library;
 
 export 'src/client.dart' show WaylandClient, WaylandSandbox;
 export 'src/server.dart' show WaylandServer, WaylandServerException;
+export 'src/toplevel.dart'
+    show WaylandToplevel, WaylandToplevelEvent, WaylandToplevelEventKind;
 export 'src/view.dart'
     show
         WaylandToplevelController,

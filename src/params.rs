@@ -30,6 +30,8 @@ pub struct ViewParams {
     /// Bind only a toplevel of a client in the sandbox with this app_id
     /// (wp_security_context_v1).
     pub sandbox_app_id: Option<String>,
+    /// Bind this window only (an `IhsWlToplevelEvent` id).
+    pub toplevel_id: Option<i64>,
     /// Device pixel ratio of the view.
     pub dpr: Option<f64>,
     /// The size to ask the client for instead of the view's, in logical
@@ -57,6 +59,10 @@ impl ViewParams {
             token: string("token"),
             app_id: string("app_id"),
             sandbox_app_id: string("sandbox_app_id"),
+            toplevel_id: match map.get("toplevel_id") {
+                Some(Value::Int(i)) if *i > 0 => Some(*i),
+                _ => None,
+            },
             dpr: positive("dpr"),
             requested: crate::requested_size(
                 positive("requested_width").unwrap_or(0.0),
@@ -234,6 +240,22 @@ mod tests {
         b.extend_from_slice(&(0x1_02i64).to_le_bytes());
         assert_eq!(ViewParams::decode(&b).window_state, 2);
         assert_eq!(ViewParams::decode(&encoded()).capabilities, 0);
+    }
+
+    #[test]
+    fn decodes_a_toplevel_id_only_when_positive() {
+        // Dart encodes an int that fits as int32.
+        let map = |id: i32| {
+            let mut b = vec![T_MAP, 1, T_STRING, 11];
+            b.extend_from_slice(b"toplevel_id");
+            b.push(T_INT32);
+            b.extend_from_slice(&id.to_le_bytes());
+            ViewParams::decode(&b).toplevel_id
+        };
+        assert_eq!(map(7), Some(7));
+        assert_eq!(map(0), None);
+        assert_eq!(map(-1), None);
+        assert_eq!(ViewParams::decode(&encoded()).toplevel_id, None);
     }
 
     #[test]
