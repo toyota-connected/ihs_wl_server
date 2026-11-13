@@ -476,3 +476,50 @@ fn a_window_that_becomes_a_dialog_leaves_its_view() {
     mock_host::dispose_view(1);
     mock_host::dispose_view(2);
 }
+
+#[test]
+fn a_token_for_another_clients_input_asks_for_attention() {
+    const SOCKET: &str = "ihs-wl-test-toplevel-serial";
+    const KEY_A: u32 = 30;
+    let _serial = serial();
+    POSTED.lock().unwrap().clear();
+    let mut h = Harness::new(SOCKET);
+    assert_eq!(ihs_wl_set_event_port(Some(record), PORT), 0);
+    h.client.create_toplevel("org.example.Launcher", "launcher");
+    let buf = h.client.new_dmabuf(64, 64);
+    h.client.commit_buffer(buf, false);
+    h.bind(1, "org.example.Launcher", 64.0, 64.0);
+    let mut app = Client::connect(SOCKET);
+    app.create_toplevel(APP, "app");
+    let buf = app.new_dmabuf(64, 64);
+    app.commit_buffer(buf, false);
+    h.bind(2, APP, 64.0, 64.0);
+    let id = wait_mapped(2)[1];
+
+    // A key the app got...
+    assert_eq!(ihs_wl_focus(2, 1), 0);
+    app.dispatch_until("app activated", |c| c.activated());
+    assert_eq!(ihs_wl_key(2, KEY_A, 1, 0), 0);
+    assert_eq!(ihs_wl_key(2, KEY_A, 0, 0), 0);
+    app.roundtrip();
+    let theirs = app.input_serial().expect("app got the key");
+    // ...named in a token the launcher makes once it has focus: not its
+    // input.
+    assert_eq!(ihs_wl_focus(1, 1), 0);
+    h.client
+        .dispatch_until("launcher activated", |c| c.activated());
+    let token = h.client.serial_token(theirs);
+    app.activate(&token);
+    wait("attention", T::AttentionRequested, id, 1);
+    assert_eq!(count(T::ActivationRequested, id), 0);
+
+    // Its own key: the user asked.
+    press_key(&mut h);
+    let token = h.client.input_token();
+    app.activate(&token);
+    wait("activation", T::ActivationRequested, id, 1);
+
+    assert_eq!(ihs_wl_set_event_port(None, 0), 0);
+    mock_host::dispose_view(1);
+    mock_host::dispose_view(2);
+}

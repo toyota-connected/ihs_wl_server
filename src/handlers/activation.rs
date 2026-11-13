@@ -21,7 +21,6 @@ use smithay::delegate_xdg_activation;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::Serial;
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
@@ -70,13 +69,13 @@ impl XdgActivationHandler for State {
     }
 
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
-        let focused = self.focused_client();
-        let granted = focused.is_some()
-            && focused == data.client_id
-            && data
-                .serial
-                .as_ref()
-                .is_some_and(|(s, _)| self.is_input_serial(*s));
+        // Made by the focused client, for input it got lately.
+        let granted = match (self.focused_client(), &data.client_id, &data.serial) {
+            (Some(focused), Some(maker), Some((serial, _))) => {
+                focused == *maker && self.is_input_serial_of(*serial, maker)
+            }
+            _ => false,
+        };
         if granted {
             data.user_data.insert_if_missing(|| Granted);
         }
@@ -148,16 +147,6 @@ impl State {
             .and_then(|v| self.focus_window(v))
             .and_then(|w| w.client())
             .map(|c| c.id())
-    }
-
-    /// Whether @p serial is no older than the input that gave the focused
-    /// client focus and no newer than the last input.
-    fn is_input_serial(&self, serial: Serial) -> bool {
-        let Some(last) = self.devices.input_serial else {
-            return false;
-        };
-        let floor = self.devices.focus.as_ref().and_then(|(_, s)| *s);
-        floor.is_none_or(|f| serial.is_no_older_than(&f)) && last.is_no_older_than(&serial)
     }
 
     /// @p surface's window asks to be shown; held until it is a window.

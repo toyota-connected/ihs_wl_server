@@ -1306,8 +1306,18 @@ impl Client {
 
     /// A token for the last key, button or touch event this client got.
     pub fn input_token(&mut self) -> String {
-        let serial = self.app.input_serial.expect("no input yet");
+        let serial = self.input_serial().expect("no input yet");
         self.make_token(Some(serial))
+    }
+
+    /// A token naming input @p serial, whoever got it.
+    pub fn serial_token(&mut self, serial: u32) -> String {
+        self.make_token(Some(serial))
+    }
+
+    /// The serial of the last key, button or touch event this client got.
+    pub fn input_serial(&self) -> Option<u32> {
+        self.app.input_serial
     }
 
     fn make_token(&mut self, serial: Option<u32>) -> String {
