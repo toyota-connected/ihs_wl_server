@@ -14,6 +14,7 @@ class WaylandToplevel {
     required this.title,
     required this.client,
     this.viewId,
+    this.activationToken,
   });
 
   /// What `WaylandToplevelView.toplevelId` names to show it.
@@ -26,6 +27,11 @@ class WaylandToplevel {
   /// The platform view showing it, or null while none does.
   final int? viewId;
 
+  /// The token from `WaylandServer.launch` or `activationToken` it was
+  /// activated with: the app launched it, for the view naming that token,
+  /// which may not be made yet. Null for any other window.
+  final String? activationToken;
+
   final WaylandClient client;
 
   @override
@@ -35,15 +41,17 @@ class WaylandToplevel {
       other.appId == appId &&
       other.title == title &&
       other.viewId == viewId &&
+      other.activationToken == activationToken &&
       other.client == client;
 
   @override
-  int get hashCode => Object.hash(id, appId, title, viewId, client);
+  int get hashCode =>
+      Object.hash(id, appId, title, viewId, activationToken, client);
 
   @override
   String toString() =>
       'WaylandToplevel(id: $id, appId: $appId, title: $title, '
-      'viewId: $viewId, client: $client)';
+      'viewId: $viewId, activationToken: $activationToken, client: $client)';
 }
 
 /// What happened to a window.

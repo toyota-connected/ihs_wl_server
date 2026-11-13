@@ -261,6 +261,9 @@ pub struct IhsWlToplevelInfo {
     /// As the client set them; truncated to fit.
     pub app_id: [c_char; 256],
     pub title: [c_char; 256],
+    /// The token from `ihs_wl_activation_token` it was activated with: the
+    /// app launched it, for the view naming that token. Empty for any other.
+    pub activation_token: [c_char; 256],
     /// Its client, as `ihs_wl_view_client` reports it.
     pub client: IhsWlClientInfo,
 }
@@ -272,6 +275,8 @@ pub struct ToplevelInfo {
     pub view: Option<i32>,
     pub app_id: String,
     pub title: String,
+    /// The token from `ihs_wl_activation_token` it was activated with.
+    pub activation_token: Option<String>,
     pub client: ClientInfo,
 }
 
@@ -485,6 +490,10 @@ pub unsafe extern "C" fn ihs_wl_toplevel_info(
         info.view_id = toplevel.view.unwrap_or(-1);
         copy_str(&mut info.app_id, Some(&toplevel.app_id));
         copy_str(&mut info.title, Some(&toplevel.title));
+        copy_str(
+            &mut info.activation_token,
+            toplevel.activation_token.as_deref(),
+        );
         let size = std::mem::size_of::<IhsWlClientInfo>();
         info.client.struct_size = size;
         write_client(&mut info.client, size, toplevel.client);

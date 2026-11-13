@@ -34,7 +34,9 @@ const String _viewType = 'ihs_wl/toplevel';
 /// theirs. Until a matching client maps, the view is empty.
 ///
 /// With a [toplevelId] it is that window only, whatever its token or app_id;
-/// once the window is gone the view stays empty.
+/// once the window is gone the view stays empty. It takes a window the app
+/// launched from the view naming its token: leave a window with a
+/// `WaylandToplevel.activationToken` to that view.
 ///
 /// A client sandboxed by an engine such as flatpak (wp_security_context_v1)
 /// matches [appId] only when it is its sandbox's app id. With a

@@ -205,6 +205,7 @@ class WaylandServer {
       appId: cString(i.app_id) ?? '',
       title: cString(i.title) ?? '',
       viewId: i.view_id < 0 ? null : i.view_id,
+      activationToken: cString(i.activation_token),
       client: clientFromInfo(i.client),
     );
   });

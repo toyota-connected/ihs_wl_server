@@ -18,9 +18,9 @@ use common::client::Client;
 use common::harness::Harness;
 use common::{mock_host, serial};
 use ihs_wl_server::{
-    ihs_wl_focus, ihs_wl_key, ihs_wl_pointer, ihs_wl_set_event_port, ihs_wl_toplevel_info,
-    ihs_wl_toplevels, toplevel_info, toplevels, IhsWlPointerEvent, IhsWlPointerKind,
-    IhsWlToplevelEvent as T, IhsWlToplevelInfo,
+    ihs_wl_activation_token, ihs_wl_focus, ihs_wl_key, ihs_wl_pointer, ihs_wl_set_event_port,
+    ihs_wl_toplevel_info, ihs_wl_toplevels, toplevel_info, toplevels, IhsWlPointerEvent,
+    IhsWlPointerKind, IhsWlToplevelEvent as T, IhsWlToplevelInfo,
 };
 
 const APP: &str = "org.example.Foreign";
@@ -147,6 +147,7 @@ fn windows_are_posted_and_a_view_binds_one_by_id() {
     let info = toplevel_info(id).unwrap().expect("mapped window");
     assert_eq!((info.app_id.as_str(), info.title.as_str()), (APP, "first"));
     assert_eq!(info.view, None);
+    assert_eq!(info.activation_token, None);
     assert_eq!(info.client.pid, std::process::id() as i32);
     assert_eq!(info.client.sandbox, None);
     assert_eq!(toplevels().unwrap(), vec![id]);
@@ -554,6 +555,35 @@ fn title_changes_are_posted_at_a_bounded_rate() {
     let posted = count(T::Changed, id);
     let most = took.as_millis() as usize / 100 + 2;
     assert!(posted <= most, "{posted} Changed in {took:?}");
+
+    assert_eq!(ihs_wl_set_event_port(None, 0), 0);
+}
+
+#[test]
+fn a_window_the_app_launched_names_its_token() {
+    const SOCKET: &str = "ihs-wl-test-toplevel-launched";
+    let _serial = serial();
+    POSTED.lock().unwrap().clear();
+    let _h = Harness::new(SOCKET);
+    assert_eq!(ihs_wl_set_event_port(Some(record), PORT), 0);
+    let mut buf = [0 as std::ffi::c_char; 256];
+    let len = unsafe { ihs_wl_activation_token(buf.as_mut_ptr(), buf.len()) };
+    assert!(len > 0);
+    let token = c_str(&buf).to_owned();
+
+    // Mapped before the view naming its token is made.
+    let mut app = Client::connect(SOCKET);
+    app.create_toplevel_activated(APP, "launched", &token);
+    let b = app.new_dmabuf(64, 64);
+    app.commit_buffer(b, false);
+    let id = wait_mapped(1)[0];
+    let info = toplevel_info(id).unwrap().unwrap();
+    assert_eq!(info.view, None);
+    assert_eq!(info.activation_token.as_deref(), Some(token.as_str()));
+    let mut c: IhsWlToplevelInfo = unsafe { std::mem::zeroed() };
+    c.struct_size = std::mem::size_of::<IhsWlToplevelInfo>();
+    assert_eq!(unsafe { ihs_wl_toplevel_info(id, &mut c) }, 1);
+    assert_eq!(c_str(&c.activation_token), token);
 
     assert_eq!(ihs_wl_set_event_port(None, 0), 0);
 }

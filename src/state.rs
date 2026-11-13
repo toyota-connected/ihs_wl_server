@@ -606,6 +606,7 @@ impl State {
             view: t.view,
             app_id,
             title,
+            activation_token: t.token.clone(),
             client: self.client_info(surface)?,
         })
     }

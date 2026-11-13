@@ -250,13 +250,20 @@ come from the client's `/.flatpak-info`, with or without a security context.
 
 Windows the app did not launch get no view of their own.
 `server.toplevelEvents` reports every window and its requests to be shown
-(`activationRequested` when the focused client made the token for user
-input and still has focus, else `attentionRequested`); `server.toplevels` lists the current ones. A view
-naming a window's id shows it:
+(`activationRequested` when the focused client made the token for input it
+got lately and still has focus, else `attentionRequested`);
+`server.toplevels` lists the current ones. A view naming a window's id shows
+it. One the app launched names its token in `activationToken`, and is for
+the view naming that token:
 
 ```dart
 server.toplevelEvents.listen((WaylandToplevelEvent e) {
-  if (e.kind == WaylandToplevelEventKind.mapped && e.toplevel?.viewId == null) {
+  final WaylandToplevel? t = e.toplevel;
+  // One the app launched is for the view naming its token.
+  if (e.kind == WaylandToplevelEventKind.mapped &&
+      t != null &&
+      t.viewId == null &&
+      t.activationToken == null) {
     showWindow(WaylandToplevelView(toplevelId: e.id));
   }
 });

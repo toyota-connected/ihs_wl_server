@@ -441,6 +441,9 @@ final class IhsWlToplevelInfo extends ffi.Struct {
   @ffi.Array.multi([256])
   external ffi.Array<ffi.Char> title;
 
+  @ffi.Array.multi([256])
+  external ffi.Array<ffi.Char> activation_token;
+
   external IhsWlClientInfo client;
 }
 

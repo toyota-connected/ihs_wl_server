@@ -324,6 +324,11 @@ typedef struct IhsWlToplevelInfo {
   char app_id[256];
   char title[256];
   /*
+   The token from `ihs_wl_activation_token` it was activated with: the
+   app launched it, for the view naming that token. Empty for any other.
+   */
+  char activation_token[256];
+  /*
    Its client, as `ihs_wl_view_client` reports it.
    */
   struct IhsWlClientInfo client;
