@@ -12,6 +12,9 @@
 //! regions included. Keys go to the view Dart last gave focus to, if it
 //! shows a toplevel and is in the scene.
 
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
+
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::desktop::utils::under_from_surface_tree;
 use smithay::desktop::WindowSurfaceType;
@@ -19,8 +22,10 @@ use smithay::input::keyboard::{FilterResult, KeyboardHandle, Keycode, XkbConfig}
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::touch::{self, DownEvent, TouchHandle, UpEvent};
 use smithay::input::Seat;
+use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, SERIAL_COUNTER};
+use smithay::reexports::wayland_server::Resource;
+use smithay::utils::{Logical, Point, Serial, SERIAL_COUNTER};
 
 use crate::state::State;
 use crate::{IhsWlPointerEvent, IhsWlPointerKind as P, IhsWlTouchEvent, IhsWlTouchKind as T};
@@ -36,6 +41,19 @@ pub(crate) const KEY_MAX: u32 = 0x2ff;
 /// xkb keycodes are evdev codes offset by 8.
 const XKB_OFFSET: u32 = 8;
 
+/// Input serials kept for activation tokens.
+const SERIALS_KEPT: usize = 32;
+
+/// A token made for input older than this is not the user asking.
+const INPUT_SERIAL_MAX_AGE: Duration = Duration::from_secs(10);
+
+/// A key, button or touch serial, the client it went to, and when.
+struct Sent {
+    serial: Serial,
+    client: ClientId,
+    at: Instant,
+}
+
 /// The seat's devices.
 pub struct Devices {
     pub pointer: PointerHandle<State>,
@@ -45,6 +63,15 @@ pub struct Devices {
     /// The pointer left its view mid-click: nothing is under it once the
     /// buttons are up.
     left: bool,
+    /// The last key, button or touch serial sent.
+    pub input_serial: Option<Serial>,
+    /// The last few of them, oldest first.
+    sent: VecDeque<Sent>,
+    /// The client each touch point went down on.
+    touch_clients: HashMap<i32, ClientId>,
+    /// The client focus is on, and the last input serial when it got it:
+    /// the press that moved focus counts as that client's input.
+    pub focus: Option<(ClientId, Option<Serial>)>,
 }
 
 impl Devices {
@@ -61,6 +88,10 @@ impl Devices {
             touch: seat.add_touch(),
             keyboard,
             left: false,
+            input_serial: None,
+            sent: VecDeque::new(),
+            touch_clients: HashMap::new(),
+            focus: None,
         }
     }
 }
@@ -142,10 +173,12 @@ impl State {
                     let focus = self.surface_under(view_id, at);
                     motion(self, focus);
                 }
+                let serial = SERIAL_COUNTER.next_serial();
+                self.input_sent(serial, pointer.current_focus().and_then(|f| client_of(&f)));
                 pointer.button(
                     self,
                     &ButtonEvent {
-                        serial: SERIAL_COUNTER.next_serial(),
+                        serial,
                         time,
                         button: ev.button,
                         state: if ev.pressed != 0 {
@@ -203,25 +236,30 @@ impl State {
         match ev.kind {
             k if k == T::Down as u32 => {
                 let focus = self.surface_under(view_id, at);
+                let serial = SERIAL_COUNTER.next_serial();
+                let client = focus.as_ref().and_then(|(f, _)| client_of(f));
+                match &client {
+                    Some(c) => self.devices.touch_clients.insert(ev.slot, c.clone()),
+                    None => self.devices.touch_clients.remove(&ev.slot),
+                };
+                self.input_sent(serial, client);
                 touch.down(
                     self,
                     focus,
                     &DownEvent {
                         slot,
                         location: at,
-                        serial: SERIAL_COUNTER.next_serial(),
+                        serial,
                         time,
                     },
                 );
             }
-            k if k == T::Up as u32 => touch.up(
-                self,
-                &UpEvent {
-                    slot,
-                    serial: SERIAL_COUNTER.next_serial(),
-                    time,
-                },
-            ),
+            k if k == T::Up as u32 => {
+                let serial = SERIAL_COUNTER.next_serial();
+                let client = self.devices.touch_clients.remove(&ev.slot);
+                self.input_sent(serial, client);
+                touch.up(self, &UpEvent { slot, serial, time });
+            }
             // The point stays with the surface it went down on.
             k if k == T::Motion as u32 => touch.motion(
                 self,
@@ -232,7 +270,10 @@ impl State {
                     time,
                 },
             ),
-            k if k == T::Cancel as u32 => touch.cancel(self),
+            k if k == T::Cancel as u32 => {
+                self.devices.touch_clients.clear();
+                touch.cancel(self);
+            }
             k if k == T::Frame as u32 => touch.frame(self),
             _ => {}
         }
@@ -245,6 +286,8 @@ impl State {
         let Some(keyboard) = self.devices.keyboard.clone() else {
             return;
         };
+        let serial = SERIAL_COUNTER.next_serial();
+        self.input_sent(serial, keyboard.current_focus().and_then(|f| client_of(&f)));
         keyboard.input::<(), _>(
             self,
             Keycode::from(evdev + XKB_OFFSET),
@@ -253,7 +296,7 @@ impl State {
             } else {
                 KeyState::Released
             },
-            SERIAL_COUNTER.next_serial(),
+            serial,
             time_ms(time_us),
             |_, _, _| FilterResult::Forward,
         );
@@ -295,12 +338,43 @@ impl State {
         }
     }
 
+    /// Input @p serial went to @p client.
+    fn input_sent(&mut self, serial: Serial, client: Option<ClientId>) {
+        self.devices.input_serial = Some(serial);
+        let Some(client) = client else {
+            return;
+        };
+        let sent = &mut self.devices.sent;
+        if sent.len() == SERIALS_KEPT {
+            sent.pop_front();
+        }
+        sent.push_back(Sent {
+            serial,
+            client,
+            at: Instant::now(),
+        });
+    }
+
+    /// Whether input @p serial went to @p client lately, no earlier than the
+    /// input that gave the focused client focus.
+    pub fn is_input_serial_of(&self, serial: Serial, client: &ClientId) -> bool {
+        let floor = self.devices.focus.as_ref().and_then(|(_, s)| *s);
+        floor.is_none_or(|f| serial.is_no_older_than(&f))
+            && self.devices.sent.iter().any(|s| {
+                s.serial == serial && s.client == *client && s.at.elapsed() < INPUT_SERIAL_MAX_AGE
+            })
+    }
+
     /// Point the keyboard, and the activated state, at what the focused
     /// view shows now, and mark suspended toplevels: after focus, binding,
     /// unbinding or suspension changed them.
     pub fn refresh_keyboard_focus(&mut self) {
         // The active window follows focus, keyboard or not.
         self.sync_states();
+        let client = self.focused_client();
+        if client.as_ref() != self.devices.focus.as_ref().map(|(c, _)| c) {
+            self.devices.focus = client.map(|c| (c, self.devices.input_serial));
+        }
         let Some(keyboard) = self.devices.keyboard.clone() else {
             return;
         };
@@ -313,4 +387,9 @@ impl State {
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         }
     }
+}
+
+/// The client of @p surface.
+fn client_of(surface: &WlSurface) -> Option<ClientId> {
+    surface.client().map(|c| c.id())
 }

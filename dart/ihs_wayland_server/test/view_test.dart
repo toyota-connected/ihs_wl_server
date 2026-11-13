@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
+import 'package:ihs_wayland_server/src/bindings.g.dart';
 import 'package:ihs_wayland_server/src/events.dart';
 
 void main() {
@@ -65,6 +68,7 @@ void main() {
             const WaylandToplevelView(
               requestedSize: Size(800, 600),
               sandboxAppId: 'org.example.App',
+              toplevelId: 7,
             ),
       ),
     );
@@ -72,6 +76,33 @@ void main() {
     expect(params?['requested_width'], 800.0);
     expect(params?['requested_height'], 600.0);
     expect(params?['sandbox_app_id'], 'org.example.App');
+    expect(params?['toplevel_id'], 7);
+  });
+
+  test('window events go to their stream, not to a view', () async {
+    final List<(IhsWlToplevelEvent, int)> got = <(IhsWlToplevelEvent, int)>[];
+    final StreamSubscription<(IhsWlToplevelEvent, int)> sub = ViewEvents
+        .toplevels
+        .stream
+        .listen(got.add);
+    addTearDown(sub.cancel);
+    int viewEvents = 0;
+    ViewEvents.watch(5, (IhsWlViewEvent _) => viewEvents++);
+    addTearDown(() => ViewEvents.unwatch(5));
+
+    ViewEvents.dispatch(<int>[256, 5]); // mapped
+    ViewEvents.dispatch(<int>[257, 5]); // changed
+    ViewEvents.dispatch(<int>[258, 5]); // unmapped
+    ViewEvents.dispatch(<int>[260, 5]); // attention
+    ViewEvents.dispatch(<int>[299, 5]); // a newer server's window event
+    await Future<void>.delayed(Duration.zero);
+    expect(got, <(IhsWlToplevelEvent, int)>[
+      (IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_MAPPED, 5),
+      (IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_CHANGED, 5),
+      (IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_UNMAPPED, 5),
+      (IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED, 5),
+    ]);
+    expect(viewEvents, 0);
   });
 
   testWidgets('the controller follows the view events', (

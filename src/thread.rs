@@ -91,6 +91,15 @@ pub enum Cmd {
         view_id: i32,
         reply: std::sync::mpsc::SyncSender<Option<crate::ClientInfo>>,
     },
+    /// What the window is, sent back on the channel.
+    ToplevelInfo {
+        toplevel_id: i64,
+        reply: std::sync::mpsc::SyncSender<Option<crate::ToplevelInfo>>,
+    },
+    /// The windows there are, sent back on the channel.
+    Toplevels(std::sync::mpsc::SyncSender<Vec<i64>>),
+    /// The client with this pid was found to be a flatpak app.
+    FlatpakRead(i32),
     /// The shell's scanout hint for a layer of the view (display thread).
     ScanoutHint {
         view_id: i32,
@@ -293,6 +302,7 @@ fn run(config: &Config, caps: &crate::caps::Caps, ready: &mut Option<Ready>) -> 
     event_loop
         .run(None, &mut state, |state| {
             state.reap_clients();
+            state.post_window_changes();
             if let Err(e) = state.dh.flush_clients() {
                 tracing::warn!("flush_clients: {e}");
             }

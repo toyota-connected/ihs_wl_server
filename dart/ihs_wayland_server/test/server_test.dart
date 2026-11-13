@@ -4,10 +4,12 @@
 // Drives the real libihs_wl_server.so over FFI, as hook/build.dart builds it.
 // IHS_WL_LIB overrides the library path.
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
+import 'package:ihs_wayland_server/src/events.dart';
 
 void main() {
   test('start, socket name, stop, restart', () {
@@ -22,11 +24,17 @@ void main() {
       isTrue,
     );
 
+    expect(server.clientEnvironment, <String, String>{
+      'WAYLAND_DISPLAY': 'ihs-wl-dart-test',
+      'XDG_SESSION_TYPE': 'wayland',
+    });
+
     // A second start (hot restart) is not an error.
     WaylandServer.start(socketName: 'ihs-wl-dart-test');
 
     server.stop();
     expect(server.socketName, isNull);
+    expect(server.clientEnvironment, isEmpty);
     server.stop(); // no-op when stopped
   });
 
@@ -53,6 +61,48 @@ void main() {
 
     server.stop();
     expect(server.activationToken, throwsA(isA<WaylandServerException>()));
+  });
+
+  test('windows: none on a new server, and a query for a gone one', () {
+    final WaylandServer server = WaylandServer.start(
+      socketName: 'ihs-wl-dart-test-toplevels',
+    );
+    expect(server.toplevels, isEmpty);
+    expect(server.toplevel(1), isNull);
+    server.stop();
+    // Stopped: nothing to ask.
+    expect(server.toplevel(1), isNull);
+    expect(() => server.toplevels, throwsA(isA<WaylandServerException>()));
+  });
+
+  test('window events reach every listener', () async {
+    final WaylandServer server = WaylandServer.start(
+      socketName: 'ihs-wl-dart-test-toplevel-events',
+    );
+    addTearDown(server.stop);
+    final List<WaylandToplevelEvent> a = <WaylandToplevelEvent>[];
+    final List<WaylandToplevelEvent> b = <WaylandToplevelEvent>[];
+    final StreamSubscription<WaylandToplevelEvent> subA = server.toplevelEvents
+        .listen(a.add);
+    final StreamSubscription<WaylandToplevelEvent> subB = server.toplevelEvents
+        .listen(b.add);
+    ViewEvents.dispatch(<int>[256, 41]); // mapped, gone before it is asked
+    ViewEvents.dispatch(<int>[258, 41]); // unmapped
+    await Future<void>.delayed(Duration.zero);
+    for (final List<WaylandToplevelEvent> got in <List<WaylandToplevelEvent>>[
+      a,
+      b,
+    ]) {
+      expect(
+        got.map((WaylandToplevelEvent e) => (e.kind, e.id, e.toplevel)),
+        <(WaylandToplevelEventKind, int, WaylandToplevel?)>[
+          (WaylandToplevelEventKind.mapped, 41, null),
+          (WaylandToplevelEventKind.unmapped, 41, null),
+        ],
+      );
+    }
+    await subA.cancel();
+    await subB.cancel();
   });
 
   test('a bad socket name throws with the module error', () {

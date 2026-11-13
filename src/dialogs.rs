@@ -13,7 +13,9 @@
 
 use smithay::desktop::utils::bbox_from_surface_tree;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point};
+use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::state::{State, Toplevels};
 
@@ -34,6 +36,57 @@ fn window_size(surface: &WlSurface) -> (i32, i32) {
 }
 
 impl State {
+    /// The window @p toplevel is a dialog of: its parent, or while that is
+    /// unmapped, the nearest mapped ancestor (xdg-shell). None for a window,
+    /// and for a dialog whose ancestors have all gone: smithay keeps a
+    /// destroyed parent.
+    pub fn parent_of(&self, toplevel: &ToplevelSurface) -> Option<WlSurface> {
+        let mut parent = toplevel.parent();
+        for _ in 0..MAX_DEPTH {
+            let p = parent.filter(|p| p.is_alive())?;
+            let t = Toplevels::id_of(&p).and_then(|id| self.toplevels.by_id.get(&id))?;
+            if t.mapped {
+                return Some(p);
+            }
+            parent = t.surface.parent();
+        }
+        None
+    }
+
+    /// Toplevel @p surface mapped or unmapped: its dialogs now belong to
+    /// another window, or are windows themselves. Show each where it
+    /// belongs.
+    pub fn refresh_dialogs_of(&mut self, surface: &WlSurface) {
+        let has_dialogs = self
+            .toplevels
+            .by_id
+            .values()
+            .any(|t| t.surface.parent().as_ref() == Some(surface));
+        if !has_dialogs {
+            return;
+        }
+        self.bind_waiting_views();
+        let ids: Vec<i64> = self.toplevels.by_id.keys().copied().collect();
+        for id in ids {
+            self.refresh_window(id);
+        }
+        self.submit_bound_views();
+        self.refresh_keyboard_focus();
+    }
+
+    /// Show every bound view's windows again: a dialog moved between them.
+    pub fn submit_bound_views(&mut self) {
+        let views: Vec<i32> = self
+            .views
+            .iter()
+            .filter(|(_, v)| v.toplevel.is_some())
+            .map(|(id, _)| *id)
+            .collect();
+        for view_id in views {
+            self.submit_view(view_id);
+        }
+    }
+
     /// The toplevel surface @p surface is shown with: through subsurfaces
     /// and popups to its toplevel, then up its dialogs' parents.
     pub fn window_root(&self, surface: &WlSurface) -> WlSurface {
@@ -41,7 +94,7 @@ impl State {
         for _ in 0..MAX_DEPTH {
             let parent = Toplevels::id_of(&root)
                 .and_then(|id| self.toplevels.by_id.get(&id))
-                .and_then(|t| t.surface.parent());
+                .and_then(|t| self.parent_of(&t.surface));
             let Some(parent) = parent else {
                 break;
             };
@@ -66,7 +119,7 @@ impl State {
         // Ids grow with creation, so a parent comes before its dialogs.
         for t in self.toplevels.by_id.values() {
             let surface = t.surface.wl_surface();
-            let Some(parent) = t.surface.parent() else {
+            let Some(parent) = self.parent_of(&t.surface) else {
                 continue;
             };
             if !t.mapped || self.window_root(surface) != root {

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
@@ -8,9 +9,11 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'bindings.g.dart';
+import 'client.dart';
 import 'events.dart';
 import 'input.dart';
 import 'loader.dart';
+import 'toplevel.dart';
 
 /// Where views send input: the running server's, if one was started.
 WaylandInput? get waylandInput =>
@@ -37,7 +40,8 @@ class WaylandServerException implements Exception {
 /// The process-wide embedded Wayland server.
 ///
 /// Clients connect to [socketName]. Each toplevel is shown by a
-/// `WaylandToplevelView`, which binds to it by activation token or app_id.
+/// `WaylandToplevelView`, which binds to it by activation token, app_id or
+/// window id.
 class WaylandServer {
   WaylandServer._(this._lib);
 
@@ -100,9 +104,26 @@ class WaylandServer {
     return out.cast<Utf8>().toDartString(length: rc);
   });
 
+  /// What a client started some other way needs to connect here:
+  /// `WAYLAND_DISPLAY`, and `XDG_SESSION_TYPE=wayland`, without which
+  /// Chromium and Electron pick X11. Pass it to the process that starts the
+  /// client (`Process.start`'s `environment`, `flatpak run`); the app's own
+  /// environment is left alone, as other threads read it. Empty once
+  /// stopped.
+  Map<String, String> get clientEnvironment {
+    final String? socket = socketName;
+    if (socket == null) {
+      return const <String, String>{};
+    }
+    return <String, String>{
+      'WAYLAND_DISPLAY': socket,
+      'XDG_SESSION_TYPE': 'wayland',
+    };
+  }
+
   /// Start a client on this server with a new activation token, which a
   /// `WaylandToplevelView` names to show it. [environment] is added to the
-  /// client's; `WAYLAND_DISPLAY` and `XDG_ACTIVATION_TOKEN` are set here.
+  /// client's; [clientEnvironment] and `XDG_ACTIVATION_TOKEN` are set here.
   /// The client shares the app's stdout and stderr unless [mode] says
   /// otherwise; with pipes, read them, or a chatty client stalls.
   Future<({Process process, String token})> launch(
@@ -111,8 +132,8 @@ class WaylandServer {
     Map<String, String>? environment,
     ProcessStartMode mode = ProcessStartMode.inheritStdio,
   }) async {
-    final String? socket = socketName;
-    if (socket == null) {
+    final Map<String, String> display = clientEnvironment;
+    if (display.isEmpty) {
       throw WaylandServerException(
         'launch',
         IhsWlResult.IHS_WL_RESULT_ERR_NOT_RUNNING.value,
@@ -125,12 +146,93 @@ class WaylandServer {
       arguments,
       environment: <String, String>{
         ...?environment,
-        'WAYLAND_DISPLAY': socket,
+        ...display,
         'XDG_ACTIVATION_TOKEN': token,
       },
       mode: mode,
     );
     return (process: process, token: token);
+  }
+
+  /// Every window's events, whoever launched it, from now on; [toplevels]
+  /// has those already there. A window's info is asked for once an event,
+  /// however many listen.
+  Stream<WaylandToplevelEvent> get toplevelEvents => _toplevelEvents.stream;
+
+  late final StreamController<WaylandToplevelEvent> _toplevelEvents =
+      StreamController<WaylandToplevelEvent>.broadcast(
+        onListen: () =>
+            _toplevelSub = ViewEvents.toplevels.stream.listen(_toplevelEvent),
+        onCancel: () {
+          _toplevelSub?.cancel();
+          _toplevelSub = null;
+        },
+      );
+  StreamSubscription<(IhsWlToplevelEvent, int)>? _toplevelSub;
+
+  void _toplevelEvent((IhsWlToplevelEvent, int) e) {
+    final (IhsWlToplevelEvent event, int id) = e;
+    final WaylandToplevelEventKind kind = switch (event) {
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_MAPPED =>
+        WaylandToplevelEventKind.mapped,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_CHANGED =>
+        WaylandToplevelEventKind.changed,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_UNMAPPED =>
+        WaylandToplevelEventKind.unmapped,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED =>
+        WaylandToplevelEventKind.activationRequested,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED =>
+        WaylandToplevelEventKind.attentionRequested,
+    };
+    _toplevelEvents.add(
+      WaylandToplevelEvent(
+        kind,
+        id,
+        kind == WaylandToplevelEventKind.unmapped ? null : toplevel(id),
+      ),
+    );
+  }
+
+  /// The window [id]; null once it is gone or the server is stopped.
+  WaylandToplevel? toplevel(int id) => using((Arena arena) {
+    final ffi.Pointer<IhsWlToplevelInfo> info = arena<IhsWlToplevelInfo>();
+    info.ref.struct_size = ffi.sizeOf<IhsWlToplevelInfo>();
+    if (_lib.ihs_wl_toplevel_info(id, info) != 1) {
+      return null;
+    }
+    final IhsWlToplevelInfo i = info.ref;
+    return WaylandToplevel(
+      id: id,
+      appId: cString(i.app_id) ?? '',
+      title: cString(i.title) ?? '',
+      viewId: i.view_id < 0 ? null : i.view_id,
+      activationToken: cString(i.activation_token),
+      client: clientFromInfo(i.client),
+    );
+  });
+
+  /// The windows there are, oldest first.
+  List<WaylandToplevel> get toplevels {
+    final List<int> ids = using((Arena arena) {
+      int cap = 0;
+      ffi.Pointer<ffi.Int64> out = ffi.nullptr;
+      while (true) {
+        final int n = _lib.ihs_wl_toplevels(out, cap);
+        if (n < 0) {
+          throw _error('ihs_wl_toplevels', n);
+        }
+        if (n == 0) {
+          return <int>[];
+        }
+        if (n <= cap) {
+          return out.asTypedList(n).toList();
+        }
+        // Grown since the count: ask again.
+        cap = n + 8;
+        out = arena<ffi.Int64>(cap);
+      }
+    });
+    return <WaylandToplevel>[for (final int id in ids) ?toplevel(id)];
   }
 
   /// Disconnect every client and stop the server.

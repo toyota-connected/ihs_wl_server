@@ -28,6 +28,8 @@
 
 import 'dart:io';
 
+// package:material_ui needs Flutter 3.47; the example builds on 3.24 up.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:ihs_wayland_server/ihs_wayland_server.dart';
 

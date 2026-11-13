@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
-//! View events for Dart, posted to a native port.
+//! View and window events for Dart, posted to a native port.
 //!
 //! Dart hands over `NativeApi.postCObject` and a `ReceivePort`'s native
 //! port. A post copies the message, and posting to a port whose isolate is
@@ -10,7 +10,8 @@
 //! the server runs on, needs nothing more than the new isolate registering
 //! its own port.
 //!
-//! Each message is a list `[event, view_id]`, `event` an `IhsWlViewEvent`.
+//! Each message is a list `[event, view_id]`, `event` an `IhsWlViewEvent`,
+//! or `[event, toplevel_id]`, `event` an `IhsWlToplevelEvent`.
 
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -62,10 +63,19 @@ pub fn set_sink(sink: Option<(PostCObject, i64)>) {
 
 /// Tell Dart @p event happened to view @p view_id, if it listens.
 pub fn post(event: crate::IhsWlViewEvent, view_id: i32) {
+    post_pair(event as i64, view_id as i64);
+}
+
+/// Tell Dart @p event happened to the window @p toplevel_id, if it listens.
+pub fn post_toplevel(event: crate::IhsWlToplevelEvent, toplevel_id: i64) {
+    post_pair(event as i64, toplevel_id);
+}
+
+fn post_pair(event: i64, id: i64) {
     let Some((post, port)) = *SINK.lock().unwrap_or_else(|e| e.into_inner()) else {
         return;
     };
-    let mut items = [int64(event as i64), int64(view_id as i64)];
+    let mut items = [int64(event), int64(id)];
     let mut values: [*mut CObject; 2] = [&mut items[0], &mut items[1]];
     let mut message = CObject {
         ty: K_ARRAY,

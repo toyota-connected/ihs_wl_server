@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
-import 'dart:convert';
 import 'dart:ffi' as ffi;
 
 import 'package:ffi/ffi.dart';
@@ -274,19 +273,7 @@ class WaylandInput {
     if (_lib.ihs_wl_view_client(viewId, info) != 1) {
       return null;
     }
-    final IhsWlClientInfo i = info.ref;
-    return WaylandClient(
-      pid: i.pid,
-      uid: i.uid,
-      gid: i.gid,
-      sandbox: i.sandboxed
-          ? WaylandSandbox(
-              engine: _string(i.sandbox_engine),
-              appId: _string(i.sandbox_app_id),
-              instanceId: _string(i.sandbox_instance_id),
-            )
-          : null,
-    );
+    return clientFromInfo(info.ref);
   });
 
   /// Ask the client of the view's toplevel to close it.
@@ -301,17 +288,4 @@ class WaylandInput {
   /// `IhsWlWindowState` bits.
   void setWindowState(int viewId, int bits) =>
       _lib.ihs_wl_view_state(viewId, bits);
-}
-
-/// A NUL-terminated UTF-8 string in [chars]; null when empty.
-String? _string(ffi.Array<ffi.Char> chars) {
-  final List<int> bytes = <int>[];
-  for (int i = 0; i < 256; i++) {
-    final int c = chars[i];
-    if (c == 0) {
-      break;
-    }
-    bytes.add(c & 0xff);
-  }
-  return bytes.isEmpty ? null : utf8.decode(bytes, allowMalformed: true);
 }

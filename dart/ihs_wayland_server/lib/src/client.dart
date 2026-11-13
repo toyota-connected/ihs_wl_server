@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:convert';
+import 'dart:ffi' as ffi;
+
 import 'package:flutter/foundation.dart';
+
+import 'bindings.g.dart';
 
 /// Who a Wayland client is, as the server knows it.
 @immutable
@@ -11,6 +16,8 @@ class WaylandClient {
     required this.uid,
     required this.gid,
     this.sandbox,
+    this.flatpakAppId,
+    this.flatpakInstanceId,
   });
 
   /// The client's credentials as of when it connected.
@@ -22,20 +29,30 @@ class WaylandClient {
   /// server's socket itself.
   final WaylandSandbox? sandbox;
 
+  /// From the client's `/.flatpak-info`, with or without a [sandbox]; null
+  /// outside flatpak. A client outside any sandbox can stage its own, so
+  /// only [sandbox] vouches for it.
+  final String? flatpakAppId;
+  final String? flatpakInstanceId;
+
   @override
   bool operator ==(Object other) =>
       other is WaylandClient &&
       other.pid == pid &&
       other.uid == uid &&
       other.gid == gid &&
-      other.sandbox == sandbox;
+      other.sandbox == sandbox &&
+      other.flatpakAppId == flatpakAppId &&
+      other.flatpakInstanceId == flatpakInstanceId;
 
   @override
-  int get hashCode => Object.hash(pid, uid, gid, sandbox);
+  int get hashCode =>
+      Object.hash(pid, uid, gid, sandbox, flatpakAppId, flatpakInstanceId);
 
   @override
   String toString() =>
-      'WaylandClient(pid: $pid, uid: $uid, gid: $gid, sandbox: $sandbox)';
+      'WaylandClient(pid: $pid, uid: $uid, gid: $gid, sandbox: $sandbox, '
+      'flatpakAppId: $flatpakAppId, flatpakInstanceId: $flatpakInstanceId)';
 }
 
 /// A sandbox engine's identity for a client (wp_security_context_v1): set
@@ -68,3 +85,32 @@ class WaylandSandbox {
       'WaylandSandbox(engine: $engine, appId: $appId, '
       'instanceId: $instanceId)';
 }
+
+/// A NUL-terminated UTF-8 string in [chars]; null when empty.
+String? cString(ffi.Array<ffi.Char> chars) {
+  final List<int> bytes = <int>[];
+  for (int i = 0; i < 256; i++) {
+    final int c = chars[i];
+    if (c == 0) {
+      break;
+    }
+    bytes.add(c & 0xff);
+  }
+  return bytes.isEmpty ? null : utf8.decode(bytes, allowMalformed: true);
+}
+
+/// The client [info] names.
+WaylandClient clientFromInfo(IhsWlClientInfo info) => WaylandClient(
+  pid: info.pid,
+  uid: info.uid,
+  gid: info.gid,
+  sandbox: info.sandboxed
+      ? WaylandSandbox(
+          engine: cString(info.sandbox_engine),
+          appId: cString(info.sandbox_app_id),
+          instanceId: cString(info.sandbox_instance_id),
+        )
+      : null,
+  flatpakAppId: cString(info.flatpak_app_id),
+  flatpakInstanceId: cString(info.flatpak_instance_id),
+);
