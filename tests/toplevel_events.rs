@@ -365,3 +365,41 @@ fn a_view_waiting_for_a_window_binds_it_when_its_view_goes() {
     assert_eq!(ihs_wl_set_event_port(None, 0), 0);
     mock_host::dispose_view(2);
 }
+
+#[test]
+fn a_null_buffer_unmaps_a_window_until_it_maps_again() {
+    let _serial = serial();
+    POSTED.lock().unwrap().clear();
+    let mut h = Harness::new("ihs-wl-test-toplevel-null-buffer");
+    assert_eq!(ihs_wl_set_event_port(Some(record), PORT), 0);
+    h.client.create_toplevel(APP, "hidden");
+    let buf = h.client.new_dmabuf(64, 64);
+    h.client.commit_buffer(buf, false);
+    let id = wait_mapped(1)[0];
+    h.bind_with(1, &params_toplevel(APP, id), 64.0, 64.0);
+
+    // Hidden: gone, and its view closed.
+    h.client.commit_no_buffer();
+    wait("unmapped", T::Unmapped, id, 1);
+    assert!(toplevels().unwrap().is_empty());
+    assert_eq!(toplevel_info(id).unwrap(), None);
+
+    // Shown again, as a new toplevel maps: the view waiting for it binds it.
+    h.client.commit_no_attach();
+    h.client.commit_buffer(buf, false);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while mapped().len() < 2 {
+        assert!(Instant::now() < deadline, "no event: mapped again");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(mapped(), vec![id, id]);
+    assert_eq!(toplevels().unwrap(), vec![id]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while toplevel_info(id).unwrap().unwrap().view != Some(1) {
+        assert!(Instant::now() < deadline, "not bound again");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(ihs_wl_set_event_port(None, 0), 0);
+    mock_host::dispose_view(1);
+}

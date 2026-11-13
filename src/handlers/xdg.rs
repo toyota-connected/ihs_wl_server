@@ -44,6 +44,40 @@ impl State {
         }
     }
 
+    /// Toplevel @p id is no longer shown: destroyed, or unmapped with a
+    /// null buffer until it maps again. Its own view shows nothing new; a
+    /// dialog leaves its parent's view.
+    pub fn unmap_toplevel(&mut self, id: i64) {
+        let Some(t) = self.toplevels.by_id.get(&id) else {
+            return;
+        };
+        let surface = t.surface.clone();
+        // A dialog's view, looked up while its parent is still known.
+        let dialog_view = surface
+            .parent()
+            .and_then(|_| self.bound_view_of(surface.wl_surface()));
+        let t = self.toplevels.by_id.get_mut(&id).unwrap();
+        // Unmapped only, no Changed for the unbind.
+        let window = std::mem::take(&mut t.window);
+        let mapped = std::mem::take(&mut t.mapped);
+        t.has_buffer = false;
+        t.asked = None;
+        self.unbind_toplevel(id);
+        if mapped {
+            let (app_id, _) = app_id_and_title(surface.wl_surface());
+            tracing::info!(id, app_id, "toplevel unmapped");
+            observe::emit(Observed::ToplevelUnmapped { app_id });
+        }
+        if window {
+            crate::events::post_toplevel(IhsWlToplevelEvent::Unmapped, id);
+        }
+        if let Some(view_id) = dialog_view {
+            // Its layers go, and the keyboard goes back to what is below.
+            self.submit_view(view_id);
+            self.refresh_keyboard_focus();
+        }
+    }
+
     /// Pass a request on and answer it: xdg-shell asks for a configure
     /// either way, and until the app grants the state (ihs_wl_view_state)
     /// it repeats what the toplevel has.
@@ -69,32 +103,8 @@ impl XdgShellHandler for State {
         let Some(id) = Toplevels::id_of(surface.wl_surface()) else {
             return;
         };
-        // A dialog's view, looked up while its parent is still known.
-        let dialog_view = surface
-            .parent()
-            .and_then(|_| self.bound_view_of(surface.wl_surface()));
-        // Unmapped only, no Changed for the unbind.
-        let window = self
-            .toplevels
-            .by_id
-            .get_mut(&id)
-            .is_some_and(|t| std::mem::take(&mut t.window));
-        self.unbind_toplevel(id);
-        if let Some(entry) = self.toplevels.by_id.remove(&id) {
-            if entry.mapped {
-                let (app_id, _) = app_id_and_title(surface.wl_surface());
-                tracing::info!(id, app_id, "toplevel unmapped");
-                observe::emit(Observed::ToplevelUnmapped { app_id });
-            }
-        }
-        if window {
-            crate::events::post_toplevel(IhsWlToplevelEvent::Unmapped, id);
-        }
-        if let Some(view_id) = dialog_view {
-            // Its layers go, and the keyboard goes back to what is below.
-            self.submit_view(view_id);
-            self.refresh_keyboard_focus();
-        }
+        self.unmap_toplevel(id);
+        self.toplevels.by_id.remove(&id);
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {

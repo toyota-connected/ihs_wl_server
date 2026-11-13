@@ -847,6 +847,8 @@ pub struct Toplevels {
 pub struct ToplevelEntry {
     pub surface: ToplevelSurface,
     pub mapped: bool,
+    /// Its last commit left a buffer attached.
+    pub has_buffer: bool,
     /// The view showing it, once bound.
     pub view: Option<i32>,
     /// The token it was activated with, one the module issued: it is for
@@ -877,6 +879,7 @@ impl Toplevels {
             ToplevelEntry {
                 surface,
                 mapped: false,
+                has_buffer: false,
                 token: None,
                 view: None,
                 window: false,

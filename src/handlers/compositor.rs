@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use smithay::backend::renderer::sync::Fence;
-use smithay::backend::renderer::utils::on_commit_buffer_handler;
+use smithay::backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state};
 use smithay::reexports::calloop::{EventSource, Interest};
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_surface::WlSurface};
 use smithay::reexports::wayland_server::{Client, Resource};
@@ -168,6 +168,15 @@ impl State {
         let Some(entry) = self.toplevels.by_id.get_mut(&id) else {
             return;
         };
+        let has_buffer =
+            with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false);
+        if entry.mapped && std::mem::replace(&mut entry.has_buffer, has_buffer) && !has_buffer {
+            // A null buffer unmaps it (xdg-shell). It maps again with the
+            // initial commit and configure, as a new toplevel would.
+            entry.surface.reset_initial_configure_sent();
+            self.unmap_toplevel(id);
+            return;
+        }
         if !entry.surface.is_initial_configure_sent() {
             // Size 0x0: the client picks until a view is bound.
             entry.surface.send_configure();
