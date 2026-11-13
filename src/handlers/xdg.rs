@@ -122,6 +122,8 @@ impl XdgShellHandler for State {
 
     fn parent_changed(&mut self, surface: ToplevelSurface) {
         if let Some(id) = Toplevels::id_of(surface.wl_surface()) {
+            // No longer a dialog: a view waiting for it may bind it.
+            self.bind_waiting_views();
             self.refresh_window(id);
         }
         // Now a dialog of another view, or none: show it where it belongs.

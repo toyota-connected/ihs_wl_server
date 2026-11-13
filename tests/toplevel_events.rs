@@ -433,3 +433,46 @@ fn a_dialog_whose_parent_closes_is_a_window() {
     assert_eq!(ihs_wl_set_event_port(None, 0), 0);
     mock_host::dispose_view(1);
 }
+
+#[test]
+fn a_window_that_becomes_a_dialog_leaves_its_view() {
+    let _serial = serial();
+    POSTED.lock().unwrap().clear();
+    let mut h = Harness::new("ihs-wl-test-toplevel-reparent");
+    assert_eq!(ihs_wl_set_event_port(Some(record), PORT), 0);
+    h.client.create_toplevel(APP, "parent");
+    let buf = h.client.new_dmabuf(64, 64);
+    h.client.commit_buffer(buf, false);
+    let parent = wait_mapped(1)[0];
+    h.bind_with(1, &params_toplevel(APP, parent), 64.0, 64.0);
+
+    // A dialog let go of its parent: a window, which a view shows.
+    let dialog = h.client.create_dialog("dialog", buf);
+    dialog.toplevel.set_parent(None);
+    h.client.roundtrip();
+    let id = wait_mapped(2)[1];
+    h.bind_with(2, &params_toplevel(APP, id), 64.0, 64.0);
+    assert_eq!(toplevel_info(id).unwrap().unwrap().view, Some(2));
+
+    // A dialog again: no longer a window, and shown over its parent only.
+    dialog.toplevel.set_parent(Some(h.client.toplevel()));
+    h.client.roundtrip();
+    wait("unmapped", T::Unmapped, id, 1);
+    assert_eq!(toplevel_info(id).unwrap(), None);
+    assert_eq!(toplevels().unwrap(), vec![parent]);
+    h.rec.wait_for("view 2 cleared", |_| {
+        Harness::submissions(2)
+            .last()
+            .is_some_and(|s| s.layers.is_empty())
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Harness::submissions(1).last().map_or(0, |s| s.layers.len()) < 2 {
+        assert!(Instant::now() < deadline, "dialog not over its parent");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    h.client.destroy_dialog(dialog);
+    assert_eq!(ihs_wl_set_event_port(None, 0), 0);
+    mock_host::dispose_view(1);
+    mock_host::dispose_view(2);
+}

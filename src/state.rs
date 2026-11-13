@@ -580,12 +580,17 @@ impl State {
     }
 
     /// Post Mapped or Unmapped when @p toplevel_id starts or stops being a
-    /// window: mapped, without a parent.
+    /// window: mapped, without a parent. A window that became a dialog
+    /// leaves its view.
     pub fn refresh_window(&mut self, toplevel_id: i64) {
         let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };
         let dialog = self.parent_of(&t.surface).is_some();
+        if dialog && t.view.is_some() {
+            // A dialog is shown with its parent: it leaves its own view.
+            self.unbind_toplevel(toplevel_id);
+        }
         let t = self.toplevels.by_id.get_mut(&toplevel_id).unwrap();
         let window = t.mapped && !dialog;
         if dialog {
