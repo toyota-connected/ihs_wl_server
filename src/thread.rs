@@ -98,6 +98,8 @@ pub enum Cmd {
     },
     /// The windows there are, sent back on the channel.
     Toplevels(std::sync::mpsc::SyncSender<Vec<i64>>),
+    /// The client with this pid was found to be a flatpak app.
+    FlatpakRead(i32),
     /// The shell's scanout hint for a layer of the view (display thread).
     ScanoutHint {
         view_id: i32,

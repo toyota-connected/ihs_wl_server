@@ -314,7 +314,10 @@ impl State {
         let data = Arc::new(ClientState {
             compositor_state: CompositorClientState::default(),
             security_context,
-            flatpak: crate::flatpak::of_stream(&stream),
+            flatpak: crate::flatpak::read(&stream, |pid| {
+                // Its windows' info has more to say now.
+                let _ = crate::thread::send(Cmd::FlatpakRead(pid));
+            }),
             clients: self.clients.clone(),
             gone: self.gone.clone(),
         });
@@ -467,6 +470,24 @@ impl State {
             }
             Cmd::ToplevelInfo { toplevel_id, reply } => {
                 let _ = reply.send(self.toplevel_info(toplevel_id));
+            }
+            Cmd::FlatpakRead(pid) => {
+                let ids: Vec<i64> = self
+                    .toplevels
+                    .by_id
+                    .iter()
+                    .filter(|(_, t)| {
+                        t.surface
+                            .wl_surface()
+                            .client()
+                            .and_then(|c| c.get_credentials(&self.dh).ok())
+                            .is_some_and(|c| c.pid == pid)
+                    })
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in ids {
+                    self.window_changed(id);
+                }
             }
             Cmd::Toplevels(reply) => {
                 let ids = self
@@ -630,7 +651,7 @@ impl State {
         let credentials = client.get_credentials(&self.dh).ok()?;
         let flatpak = client
             .get_data::<ClientState>()
-            .and_then(|d| d.flatpak.clone());
+            .and_then(|d| d.flatpak.get().cloned().flatten());
         Some(crate::ClientInfo {
             pid: credentials.pid,
             uid: credentials.uid,
@@ -816,8 +837,9 @@ pub struct ClientState {
     /// The sandbox the client connected through (wp_security_context_v1), or
     /// `None` on the server's own socket.
     pub security_context: Option<SecurityContext>,
-    /// Read as it connected, before its pid could be reused.
-    flatpak: Option<crate::FlatpakApp>,
+    /// Read as it connected, before its pid could be reused; unset for
+    /// the moment that takes.
+    flatpak: crate::flatpak::Identity,
     clients: Arc<AtomicU32>,
     gone: Arc<Mutex<Vec<ClientId>>>,
 }

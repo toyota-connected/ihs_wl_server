@@ -6,12 +6,16 @@
 //! cannot change it. A process outside any sandbox can stage a root of its
 //! own (an unprivileged user namespace) and name any app, but such a
 //! process runs as the shell's user and could do as much to the shell.
+//!
+//! Read on a thread of its own, never the event loop: that root can be a
+//! FUSE mount the client serves, where an open can block for good.
 
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
+use std::sync::{Arc, OnceLock};
 
 use crate::handlers::security_context::IDENTITY_MAX;
 use crate::FlatpakApp;
@@ -19,8 +23,37 @@ use crate::FlatpakApp;
 /// Far larger than any `.flatpak-info` flatpak writes.
 const INFO_MAX: u64 = 64 * 1024;
 
-/// The flatpak app of the process at the other end of @p stream.
-pub fn of_stream(stream: &UnixStream) -> Option<FlatpakApp> {
+/// A client's flatpak app: unset until read, then None outside flatpak.
+pub type Identity = Arc<OnceLock<Option<FlatpakApp>>>;
+
+/// Read the flatpak app of the process at the other end of @p stream on a
+/// thread of its own; @p found runs there with its pid when it is in one.
+pub fn read(stream: &UnixStream, found: impl FnOnce(i32) + Send + 'static) -> Identity {
+    let identity = Identity::default();
+    let Some(pid) = peer_pid(stream) else {
+        let _ = identity.set(None);
+        return identity;
+    };
+    let out = identity.clone();
+    let spawned = std::thread::Builder::new()
+        .name("ihs-wl-flatpak".into())
+        .spawn(move || {
+            let app = of_pid(pid);
+            let is_app = app.is_some();
+            let _ = out.set(app);
+            if is_app {
+                found(pid);
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("flatpak reader: {e}");
+        let _ = identity.set(None);
+    }
+    identity
+}
+
+/// The pid of the process at the other end of @p stream.
+fn peer_pid(stream: &UnixStream) -> Option<i32> {
     let mut cred = libc::ucred {
         pid: 0,
         uid: 0,
@@ -37,10 +70,7 @@ pub fn of_stream(stream: &UnixStream) -> Option<FlatpakApp> {
             &mut len,
         )
     };
-    if rc != 0 {
-        return None;
-    }
-    of_pid(cred.pid)
+    (rc == 0).then_some(cred.pid)
 }
 
 /// The flatpak app the process @p pid runs in, if it is in one.
@@ -131,5 +161,14 @@ mod tests {
         // This test process runs on the host.
         assert_eq!(of_pid(std::process::id() as i32), None);
         assert_eq!(of_pid(0), None);
+
+        let (a, _b) = UnixStream::pair().unwrap();
+        let identity = read(&a, |_| panic!("not in flatpak"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while identity.get().is_none() {
+            assert!(std::time::Instant::now() < deadline, "never read");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(identity.get(), Some(&None));
     }
 }
