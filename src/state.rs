@@ -3,15 +3,16 @@
 
 //! All smithay protocol state, owned by the compositor thread.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smithay::desktop::PopupManager;
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Output, Scale};
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
@@ -125,7 +126,14 @@ pub struct State {
     pub next_wait: u64,
     /// Clients disconnected since the last look, as their data records it.
     gone: Arc<Mutex<Vec<ClientId>>>,
+    /// Windows changed since Changed was last posted for them.
+    changed_windows: BTreeSet<i64>,
+    /// A timer will post the changes held back.
+    changed_timer: bool,
 }
+
+/// Changed is posted for a window at most this often.
+const CHANGED_INTERVAL: Duration = Duration::from_millis(100);
 
 /// A live platform view and what it shows.
 pub struct ViewEntry {
@@ -305,6 +313,8 @@ impl State {
             waits: HashMap::new(),
             next_wait: 0,
             gone: Arc::default(),
+            changed_windows: BTreeSet::new(),
+            changed_timer: false,
         }
     }
 
@@ -633,15 +643,56 @@ impl State {
         }
     }
 
-    /// Tell Dart the window @p toplevel_id changed, if it is one.
-    pub fn window_changed(&self, toplevel_id: i64) {
+    /// Tell Dart the window @p toplevel_id changed, if it is one: once per
+    /// loop iteration and at most every CHANGED_INTERVAL, however often it
+    /// changes (a title a terminal updates as it prints).
+    pub fn window_changed(&mut self, toplevel_id: i64) {
         if self
             .toplevels
             .by_id
             .get(&toplevel_id)
             .is_some_and(|t| t.window)
         {
-            crate::events::post_toplevel(crate::IhsWlToplevelEvent::Changed, toplevel_id);
+            self.changed_windows.insert(toplevel_id);
+        }
+    }
+
+    /// Post Changed for the windows changed since, each no sooner than
+    /// CHANGED_INTERVAL after its last; the rest wait on a timer.
+    pub fn post_window_changes(&mut self) {
+        if self.changed_windows.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut due: Option<Instant> = None;
+        for id in std::mem::take(&mut self.changed_windows) {
+            let Some(t) = self.toplevels.by_id.get_mut(&id) else {
+                continue;
+            };
+            if !t.window {
+                continue;
+            }
+            match t.changed_at.map(|at| at + CHANGED_INTERVAL) {
+                Some(next) if now < next => {
+                    due = Some(due.map_or(next, |d| d.min(next)));
+                    self.changed_windows.insert(id);
+                }
+                _ => {
+                    t.changed_at = Some(now);
+                    crate::events::post_toplevel(crate::IhsWlToplevelEvent::Changed, id);
+                }
+            }
+        }
+        if let (Some(due), false) = (due, self.changed_timer) {
+            // The loop posts the rest when it wakes.
+            let timer = Timer::from_deadline(due);
+            match self.loop_handle.insert_source(timer, |_, _, state| {
+                state.changed_timer = false;
+                TimeoutAction::Drop
+            }) {
+                Ok(_) => self.changed_timer = true,
+                Err(e) => tracing::warn!("changed timer: {e}"),
+            }
         }
     }
 
@@ -889,6 +940,8 @@ pub struct ToplevelEntry {
     pub asked: Option<crate::handlers::activation::Asked>,
     /// When AttentionRequested was last posted for it.
     pub attention_at: Option<Instant>,
+    /// When Changed was last posted for it.
+    pub changed_at: Option<Instant>,
 }
 
 /// The toplevel id, stored in the surface's data map.
@@ -914,6 +967,7 @@ impl Toplevels {
                 window: false,
                 asked: None,
                 attention_at: None,
+                changed_at: None,
             },
         );
         id

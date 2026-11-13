@@ -523,3 +523,35 @@ fn a_token_for_another_clients_input_asks_for_attention() {
     mock_host::dispose_view(1);
     mock_host::dispose_view(2);
 }
+
+#[test]
+fn title_changes_are_posted_at_a_bounded_rate() {
+    let _serial = serial();
+    POSTED.lock().unwrap().clear();
+    let mut h = Harness::new("ihs-wl-test-toplevel-changed");
+    assert_eq!(ihs_wl_set_event_port(Some(record), PORT), 0);
+    h.client.create_toplevel(APP, "0");
+    let buf = h.client.new_dmabuf(64, 64);
+    h.client.commit_buffer(buf, false);
+    let id = wait_mapped(1)[0];
+
+    // A terminal retitling itself as it prints.
+    let start = Instant::now();
+    for i in 1..=200 {
+        h.client.toplevel().set_title(i.to_string());
+        h.client.roundtrip();
+    }
+    let took = start.elapsed();
+    // The last one is never held back for good.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while toplevel_info(id).unwrap().unwrap().title != "200" || count(T::Changed, id) == 0 {
+        assert!(Instant::now() < deadline, "last title not posted");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(250));
+    let posted = count(T::Changed, id);
+    let most = took.as_millis() as usize / 100 + 2;
+    assert!(posted <= most, "{posted} Changed in {took:?}");
+
+    assert_eq!(ihs_wl_set_event_port(None, 0), 0);
+}

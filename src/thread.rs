@@ -302,6 +302,7 @@ fn run(config: &Config, caps: &crate::caps::Caps, ready: &mut Option<Ready>) -> 
     event_loop
         .run(None, &mut state, |state| {
             state.reap_clients();
+            state.post_window_changes();
             if let Err(e) = state.dh.flush_clients() {
                 tracing::warn!("flush_clients: {e}");
             }

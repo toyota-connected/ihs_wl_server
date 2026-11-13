@@ -297,7 +297,9 @@ typedef struct IhsWlClientInfo {
   /*
    From the client's `/.flatpak-info`, with or without a security
    context; empty outside flatpak. A client outside any sandbox can
-   stage its own, so only `sandboxed` vouches for it.
+   stage its own, so only `sandboxed` vouches for it. Read as the client
+   connects, off the event loop: empty for the moment that takes, and
+   its windows post Changed once it is read.
    */
   char flatpak_app_id[256];
   char flatpak_instance_id[256];
