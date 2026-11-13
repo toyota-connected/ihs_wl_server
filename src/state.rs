@@ -504,7 +504,7 @@ impl State {
         let named = params.toplevel_id;
         let found = self.toplevels.by_id.iter().find_map(|(id, t)| {
             // A dialog is shown with its parent, never on its own.
-            if !t.mapped || t.view.is_some() || t.surface.parent().is_some() {
+            if !t.mapped || t.view.is_some() || self.parent_of(&t.surface).is_some() {
                 return None;
             }
             if let Some(sandbox) = &sandbox {
@@ -582,11 +582,13 @@ impl State {
     /// Post Mapped or Unmapped when @p toplevel_id starts or stops being a
     /// window: mapped, without a parent.
     pub fn refresh_window(&mut self, toplevel_id: i64) {
-        let Some(t) = self.toplevels.by_id.get_mut(&toplevel_id) else {
+        let Some(t) = self.toplevels.by_id.get(&toplevel_id) else {
             return;
         };
-        let window = t.mapped && t.surface.parent().is_none();
-        if t.surface.parent().is_some() {
+        let dialog = self.parent_of(&t.surface).is_some();
+        let t = self.toplevels.by_id.get_mut(&toplevel_id).unwrap();
+        let window = t.mapped && !dialog;
+        if dialog {
             t.asked = None;
         }
         if window == t.window {

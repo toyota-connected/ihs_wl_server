@@ -53,8 +53,8 @@ impl State {
         };
         let surface = t.surface.clone();
         // A dialog's view, looked up while its parent is still known.
-        let dialog_view = surface
-            .parent()
+        let dialog_view = self
+            .parent_of(&surface)
             .and_then(|_| self.bound_view_of(surface.wl_surface()));
         let t = self.toplevels.by_id.get_mut(&id).unwrap();
         // Unmapped only, no Changed for the unbind.
@@ -76,6 +76,7 @@ impl State {
             self.submit_view(view_id);
             self.refresh_keyboard_focus();
         }
+        self.refresh_dialogs_of(surface.wl_surface());
     }
 
     /// Pass a request on and answer it: xdg-shell asks for a configure
@@ -124,16 +125,7 @@ impl XdgShellHandler for State {
             self.refresh_window(id);
         }
         // Now a dialog of another view, or none: show it where it belongs.
-        let views: Vec<i32> = self.views.keys().copied().collect();
-        for view_id in views {
-            if self
-                .views
-                .get(&view_id)
-                .is_some_and(|v| v.toplevel.is_some())
-            {
-                self.submit_view(view_id);
-            }
-        }
+        self.submit_bound_views();
         tracing::debug!(
             parent = surface.parent().is_some(),
             "toplevel parent changed"

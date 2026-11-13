@@ -194,6 +194,8 @@ impl State {
             self.bind_waiting_views();
             // After binding, so the window's info names its view.
             self.refresh_window(id);
+            // Its dialogs' windows, while it was unmapped, are its again.
+            self.refresh_dialogs_of(surface);
             // A dialog over a view takes the keyboard from its parent.
             self.refresh_keyboard_focus();
         }

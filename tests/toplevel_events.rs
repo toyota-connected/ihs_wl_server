@@ -403,3 +403,33 @@ fn a_null_buffer_unmaps_a_window_until_it_maps_again() {
     assert_eq!(ihs_wl_set_event_port(None, 0), 0);
     mock_host::dispose_view(1);
 }
+
+#[test]
+fn a_dialog_whose_parent_closes_is_a_window() {
+    let _serial = serial();
+    POSTED.lock().unwrap().clear();
+    let mut h = Harness::new("ihs-wl-test-toplevel-orphan");
+    assert_eq!(ihs_wl_set_event_port(Some(record), PORT), 0);
+    h.client.create_toplevel(APP, "parent");
+    let buf = h.client.new_dmabuf(64, 64);
+    h.client.commit_buffer(buf, false);
+    let parent = wait_mapped(1)[0];
+    let dialog = h.client.create_dialog("dialog", buf);
+    h.client.roundtrip();
+    assert_eq!(toplevels().unwrap(), vec![parent]);
+
+    // Its parent closes; the dialog stays up on its own.
+    h.client.destroy_toplevel();
+    wait("unmapped", T::Unmapped, parent, 1);
+    let id = wait_mapped(2)[1];
+    assert_ne!(id, parent);
+    assert_eq!(toplevels().unwrap(), vec![id]);
+    assert_eq!(toplevel_info(id).unwrap().unwrap().title, "dialog");
+    h.bind_with(1, &params_toplevel(APP, id), 64.0, 64.0);
+    assert_eq!(toplevel_info(id).unwrap().unwrap().view, Some(1));
+
+    h.client.destroy_dialog(dialog);
+    wait("unmapped", T::Unmapped, id, 1);
+    assert_eq!(ihs_wl_set_event_port(None, 0), 0);
+    mock_host::dispose_view(1);
+}
