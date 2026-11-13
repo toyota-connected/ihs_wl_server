@@ -205,20 +205,7 @@ class WaylandServer {
       appId: cString(i.app_id) ?? '',
       title: cString(i.title) ?? '',
       viewId: i.view_id < 0 ? null : i.view_id,
-      client: WaylandClient(
-        pid: i.pid,
-        uid: i.uid,
-        gid: i.gid,
-        sandbox: i.sandboxed
-            ? WaylandSandbox(
-                engine: cString(i.sandbox_engine),
-                appId: cString(i.sandbox_app_id),
-                instanceId: cString(i.sandbox_instance_id),
-              )
-            : null,
-        flatpakAppId: cString(i.flatpak_app_id),
-        flatpakInstanceId: cString(i.flatpak_instance_id),
-      ),
+      client: clientFromInfo(i.client),
     );
   });
 

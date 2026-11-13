@@ -273,21 +273,7 @@ class WaylandInput {
     if (_lib.ihs_wl_view_client(viewId, info) != 1) {
       return null;
     }
-    final IhsWlClientInfo i = info.ref;
-    return WaylandClient(
-      pid: i.pid,
-      uid: i.uid,
-      gid: i.gid,
-      sandbox: i.sandboxed
-          ? WaylandSandbox(
-              engine: cString(i.sandbox_engine),
-              appId: cString(i.sandbox_app_id),
-              instanceId: cString(i.sandbox_instance_id),
-            )
-          : null,
-      flatpakAppId: cString(i.flatpak_app_id),
-      flatpakInstanceId: cString(i.flatpak_instance_id),
-    );
+    return clientFromInfo(info.ref);
   });
 
   /// Ask the client of the view's toplevel to close it.

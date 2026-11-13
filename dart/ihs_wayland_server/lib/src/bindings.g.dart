@@ -441,32 +441,7 @@ final class IhsWlToplevelInfo extends ffi.Struct {
   @ffi.Array.multi([256])
   external ffi.Array<ffi.Char> title;
 
-  @ffi.Int32()
-  external int pid;
-
-  @ffi.Uint32()
-  external int uid;
-
-  @ffi.Uint32()
-  external int gid;
-
-  @ffi.Bool()
-  external bool sandboxed;
-
-  @ffi.Array.multi([256])
-  external ffi.Array<ffi.Char> sandbox_engine;
-
-  @ffi.Array.multi([256])
-  external ffi.Array<ffi.Char> sandbox_app_id;
-
-  @ffi.Array.multi([256])
-  external ffi.Array<ffi.Char> sandbox_instance_id;
-
-  @ffi.Array.multi([256])
-  external ffi.Array<ffi.Char> flatpak_app_id;
-
-  @ffi.Array.multi([256])
-  external ffi.Array<ffi.Char> flatpak_instance_id;
+  external IhsWlClientInfo client;
 }
 
 final class IhsWlPointerEvent extends ffi.Struct {

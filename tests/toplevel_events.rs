@@ -157,8 +157,10 @@ fn windows_are_posted_and_a_view_binds_one_by_id() {
     assert_eq!(unsafe { ihs_wl_toplevel_info(id, &mut c) }, 1);
     assert_eq!(c.view_id, -1);
     assert_eq!((c_str(&c.app_id), c_str(&c.title)), (APP, "first"));
-    assert_eq!(c.pid, std::process::id() as i32);
-    assert!(!c.sandboxed);
+    assert_eq!(c.client.struct_size, std::mem::size_of_val(&c.client));
+    assert_eq!(c.client.pid, std::process::id() as i32);
+    assert!(!c.client.sandboxed);
+    assert_eq!(c_str(&c.client.flatpak_app_id), "");
     let mut ids = [0i64; 4];
     assert_eq!(unsafe { ihs_wl_toplevels(ids.as_mut_ptr(), ids.len()) }, 1);
     assert_eq!(ids[0], id);

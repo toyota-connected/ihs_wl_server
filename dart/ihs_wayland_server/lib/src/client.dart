@@ -6,6 +6,8 @@ import 'dart:ffi' as ffi;
 
 import 'package:flutter/foundation.dart';
 
+import 'bindings.g.dart';
+
 /// Who a Wayland client is, as the server knows it.
 @immutable
 class WaylandClient {
@@ -96,3 +98,19 @@ String? cString(ffi.Array<ffi.Char> chars) {
   }
   return bytes.isEmpty ? null : utf8.decode(bytes, allowMalformed: true);
 }
+
+/// The client [info] names.
+WaylandClient clientFromInfo(IhsWlClientInfo info) => WaylandClient(
+  pid: info.pid,
+  uid: info.uid,
+  gid: info.gid,
+  sandbox: info.sandboxed
+      ? WaylandSandbox(
+          engine: cString(info.sandbox_engine),
+          appId: cString(info.sandbox_app_id),
+          instanceId: cString(info.sandbox_instance_id),
+        )
+      : null,
+  flatpakAppId: cString(info.flatpak_app_id),
+  flatpakInstanceId: cString(info.flatpak_instance_id),
+);

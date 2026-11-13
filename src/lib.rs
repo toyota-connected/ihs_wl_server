@@ -261,16 +261,8 @@ pub struct IhsWlToplevelInfo {
     /// As the client set them; truncated to fit.
     pub app_id: [c_char; 256],
     pub title: [c_char; 256],
-    /// Its client, as in `IhsWlClientInfo`.
-    pub pid: i32,
-    pub uid: u32,
-    pub gid: u32,
-    pub sandboxed: bool,
-    pub sandbox_engine: [c_char; 256],
-    pub sandbox_app_id: [c_char; 256],
-    pub sandbox_instance_id: [c_char; 256],
-    pub flatpak_app_id: [c_char; 256],
-    pub flatpak_instance_id: [c_char; 256],
+    /// Its client, as `ihs_wl_view_client` reports it.
+    pub client: IhsWlClientInfo,
 }
 
 /// A window.
@@ -468,24 +460,7 @@ pub unsafe extern "C" fn ihs_wl_view_client(view_id: i32, info: *mut IhsWlClient
         let Some(client) = view_client(view_id)? else {
             return Ok(0);
         };
-        // Field by field: the caller's struct may end before the flatpak ones.
-        std::ptr::addr_of_mut!((*info).pid).write(client.pid);
-        std::ptr::addr_of_mut!((*info).uid).write(client.uid);
-        std::ptr::addr_of_mut!((*info).gid).write(client.gid);
-        std::ptr::addr_of_mut!((*info).sandboxed).write(client.sandbox.is_some());
-        copy_sandbox(
-            client.sandbox,
-            &mut *std::ptr::addr_of_mut!((*info).sandbox_engine),
-            &mut *std::ptr::addr_of_mut!((*info).sandbox_app_id),
-            &mut *std::ptr::addr_of_mut!((*info).sandbox_instance_id),
-        );
-        if size >= std::mem::size_of::<IhsWlClientInfo>() {
-            copy_flatpak(
-                client.flatpak,
-                &mut *std::ptr::addr_of_mut!((*info).flatpak_app_id),
-                &mut *std::ptr::addr_of_mut!((*info).flatpak_instance_id),
-            );
-        }
+        write_client(info, size, client);
         Ok(1)
     })
 }
@@ -510,21 +485,9 @@ pub unsafe extern "C" fn ihs_wl_toplevel_info(
         info.view_id = toplevel.view.unwrap_or(-1);
         copy_str(&mut info.app_id, Some(&toplevel.app_id));
         copy_str(&mut info.title, Some(&toplevel.title));
-        info.pid = toplevel.client.pid;
-        info.uid = toplevel.client.uid;
-        info.gid = toplevel.client.gid;
-        info.sandboxed = toplevel.client.sandbox.is_some();
-        copy_sandbox(
-            toplevel.client.sandbox,
-            &mut info.sandbox_engine,
-            &mut info.sandbox_app_id,
-            &mut info.sandbox_instance_id,
-        );
-        copy_flatpak(
-            toplevel.client.flatpak,
-            &mut info.flatpak_app_id,
-            &mut info.flatpak_instance_id,
-        );
+        let size = std::mem::size_of::<IhsWlClientInfo>();
+        info.client.struct_size = size;
+        write_client(&mut info.client, size, toplevel.client);
         Ok(1)
     })
 }
@@ -548,34 +511,46 @@ pub unsafe extern "C" fn ihs_wl_toplevels(out: *mut i64, cap: usize) -> c_int {
     })
 }
 
-/// Copy @p sandbox's fields, or empty ones without it.
-fn copy_sandbox(
-    sandbox: Option<Sandbox>,
-    engine: &mut [c_char; 256],
-    app_id: &mut [c_char; 256],
-    instance_id: &mut [c_char; 256],
-) {
-    let sandbox = sandbox.unwrap_or(Sandbox {
+/// Write @p client into @p info, @p size bytes of it: a struct as old as
+/// 0.1.0 ends before the flatpak fields, which are then left alone.
+///
+/// # Safety
+/// `info` must be writable for @p size bytes, at least up to the flatpak
+/// fields.
+unsafe fn write_client(info: *mut IhsWlClientInfo, size: usize, client: ClientInfo) {
+    // Field by field: the caller's struct may end before the flatpak ones.
+    std::ptr::addr_of_mut!((*info).pid).write(client.pid);
+    std::ptr::addr_of_mut!((*info).uid).write(client.uid);
+    std::ptr::addr_of_mut!((*info).gid).write(client.gid);
+    std::ptr::addr_of_mut!((*info).sandboxed).write(client.sandbox.is_some());
+    let sandbox = client.sandbox.unwrap_or(Sandbox {
         engine: None,
         app_id: None,
         instance_id: None,
     });
-    copy_str(engine, sandbox.engine.as_deref());
-    copy_str(app_id, sandbox.app_id.as_deref());
-    copy_str(instance_id, sandbox.instance_id.as_deref());
-}
-
-/// Copy @p flatpak's fields, or empty ones without it.
-fn copy_flatpak(
-    flatpak: Option<FlatpakApp>,
-    app_id: &mut [c_char; 256],
-    instance_id: &mut [c_char; 256],
-) {
-    copy_str(app_id, flatpak.as_ref().map(|f| f.app_id.as_str()));
     copy_str(
-        instance_id,
-        flatpak.as_ref().and_then(|f| f.instance_id.as_deref()),
+        &mut *std::ptr::addr_of_mut!((*info).sandbox_engine),
+        sandbox.engine.as_deref(),
     );
+    copy_str(
+        &mut *std::ptr::addr_of_mut!((*info).sandbox_app_id),
+        sandbox.app_id.as_deref(),
+    );
+    copy_str(
+        &mut *std::ptr::addr_of_mut!((*info).sandbox_instance_id),
+        sandbox.instance_id.as_deref(),
+    );
+    if size >= std::mem::size_of::<IhsWlClientInfo>() {
+        let flatpak = client.flatpak.as_ref();
+        copy_str(
+            &mut *std::ptr::addr_of_mut!((*info).flatpak_app_id),
+            flatpak.map(|f| f.app_id.as_str()),
+        );
+        copy_str(
+            &mut *std::ptr::addr_of_mut!((*info).flatpak_instance_id),
+            flatpak.and_then(|f| f.instance_id.as_deref()),
+        );
+    }
 }
 
 /// Copy @p s into @p out NUL-terminated, cut at a character boundary.

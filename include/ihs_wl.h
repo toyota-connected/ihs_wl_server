@@ -324,17 +324,9 @@ typedef struct IhsWlToplevelInfo {
   char app_id[256];
   char title[256];
   /*
-   Its client, as in `IhsWlClientInfo`.
+   Its client, as `ihs_wl_view_client` reports it.
    */
-  int32_t pid;
-  uint32_t uid;
-  uint32_t gid;
-  bool sandboxed;
-  char sandbox_engine[256];
-  char sandbox_app_id[256];
-  char sandbox_instance_id[256];
-  char flatpak_app_id[256];
-  char flatpak_instance_id[256];
+  struct IhsWlClientInfo client;
 } IhsWlToplevelInfo;
 
 /*
