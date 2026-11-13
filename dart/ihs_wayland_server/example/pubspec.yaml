@@ -3,7 +3,7 @@
 
 name: ihs_wayland_server_example
 description: Shows a Wayland client inside an ivi-homescreen platform view.
-version: 0.1.0
+version: 0.2.0
 publish_to: 'none'
 
 environment:

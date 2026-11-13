@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - `WaylandServer.toplevelEvents` and `toplevels` report every window,
   whoever launched it, and when one asks to be shown. `toplevelId` binds a
