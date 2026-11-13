@@ -391,6 +391,9 @@ impl State {
                 if self.focused_view == Some(id) {
                     self.focused_view = None;
                 }
+                // A view made for its window before this one went (a move
+                // to a new layout) waits for it.
+                self.bind_waiting_views();
             }
             Cmd::ViewResized {
                 view_id,
