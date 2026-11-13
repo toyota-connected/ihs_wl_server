@@ -22,11 +22,17 @@ void main() {
       isTrue,
     );
 
+    expect(server.clientEnvironment, <String, String>{
+      'WAYLAND_DISPLAY': 'ihs-wl-dart-test',
+      'XDG_SESSION_TYPE': 'wayland',
+    });
+
     // A second start (hot restart) is not an error.
     WaylandServer.start(socketName: 'ihs-wl-dart-test');
 
     server.stop();
     expect(server.socketName, isNull);
+    expect(server.clientEnvironment, isEmpty);
     server.stop(); // no-op when stopped
   });
 

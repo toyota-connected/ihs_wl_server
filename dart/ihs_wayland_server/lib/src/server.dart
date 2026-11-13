@@ -103,30 +103,26 @@ class WaylandServer {
     return out.cast<Utf8>().toDartString(length: rc);
   });
 
-  /// Make this server the Wayland display of the app's own process
-  /// (`WAYLAND_DISPLAY`). This is only needed if the app itself is a Wayland client.
-  void exportDisplay() {
+  /// What a client started some other way needs to connect here:
+  /// `WAYLAND_DISPLAY`, and `XDG_SESSION_TYPE=wayland`, without which
+  /// Chromium and Electron pick X11. Pass it to the process that starts the
+  /// client (`Process.start`'s `environment`, `flatpak run`); the app's own
+  /// environment is left alone, as other threads read it. Empty once
+  /// stopped.
+  Map<String, String> get clientEnvironment {
     final String? socket = socketName;
     if (socket == null) {
-      return;
+      return const <String, String>{};
     }
-    final int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, int) setenv =
-        ffi.DynamicLibrary.process().lookupFunction<
-          ffi.Int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Int),
-          int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, int)
-        >('setenv');
-    using((Arena arena) {
-      setenv(
-        'WAYLAND_DISPLAY'.toNativeUtf8(allocator: arena),
-        socket.toNativeUtf8(allocator: arena),
-        1,
-      );
-    });
+    return <String, String>{
+      'WAYLAND_DISPLAY': socket,
+      'XDG_SESSION_TYPE': 'wayland',
+    };
   }
 
   /// Start a client on this server with a new activation token, which a
   /// `WaylandToplevelView` names to show it. [environment] is added to the
-  /// client's; `WAYLAND_DISPLAY` and `XDG_ACTIVATION_TOKEN` are set here.
+  /// client's; [clientEnvironment] and `XDG_ACTIVATION_TOKEN` are set here.
   /// The client shares the app's stdout and stderr unless [mode] says
   /// otherwise; with pipes, read them, or a chatty client stalls.
   Future<({Process process, String token})> launch(
@@ -135,8 +131,8 @@ class WaylandServer {
     Map<String, String>? environment,
     ProcessStartMode mode = ProcessStartMode.inheritStdio,
   }) async {
-    final String? socket = socketName;
-    if (socket == null) {
+    final Map<String, String> display = clientEnvironment;
+    if (display.isEmpty) {
       throw WaylandServerException(
         'launch',
         IhsWlResult.IHS_WL_RESULT_ERR_NOT_RUNNING.value,
@@ -149,7 +145,7 @@ class WaylandServer {
       arguments,
       environment: <String, String>{
         ...?environment,
-        'WAYLAND_DISPLAY': socket,
+        ...display,
         'XDG_ACTIVATION_TOKEN': token,
       },
       mode: mode,
