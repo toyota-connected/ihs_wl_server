@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Toyota Connected North America
 // SPDX-License-Identifier: Apache-2.0
 
+import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
@@ -154,39 +155,43 @@ class WaylandServer {
   }
 
   /// Every window's events, whoever launched it, from now on; [toplevels]
-  /// has those already there.
-  Stream<WaylandToplevelEvent> get toplevelEvents =>
-      ViewEvents.toplevels.stream.map(((IhsWlToplevelEvent, int) e) {
-        final (IhsWlToplevelEvent event, int id) = e;
-        return switch (event) {
-          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_MAPPED =>
-            WaylandToplevelEvent(
-              WaylandToplevelEventKind.mapped,
-              id,
-              toplevel(id),
-            ),
-          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_CHANGED =>
-            WaylandToplevelEvent(
-              WaylandToplevelEventKind.changed,
-              id,
-              toplevel(id),
-            ),
-          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_UNMAPPED =>
-            WaylandToplevelEvent(WaylandToplevelEventKind.unmapped, id, null),
-          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED =>
-            WaylandToplevelEvent(
-              WaylandToplevelEventKind.activationRequested,
-              id,
-              toplevel(id),
-            ),
-          IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED =>
-            WaylandToplevelEvent(
-              WaylandToplevelEventKind.attentionRequested,
-              id,
-              toplevel(id),
-            ),
-        };
-      });
+  /// has those already there. A window's info is asked for once an event,
+  /// however many listen.
+  Stream<WaylandToplevelEvent> get toplevelEvents => _toplevelEvents.stream;
+
+  late final StreamController<WaylandToplevelEvent> _toplevelEvents =
+      StreamController<WaylandToplevelEvent>.broadcast(
+        onListen: () =>
+            _toplevelSub = ViewEvents.toplevels.stream.listen(_toplevelEvent),
+        onCancel: () {
+          _toplevelSub?.cancel();
+          _toplevelSub = null;
+        },
+      );
+  StreamSubscription<(IhsWlToplevelEvent, int)>? _toplevelSub;
+
+  void _toplevelEvent((IhsWlToplevelEvent, int) e) {
+    final (IhsWlToplevelEvent event, int id) = e;
+    final WaylandToplevelEventKind kind = switch (event) {
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_MAPPED =>
+        WaylandToplevelEventKind.mapped,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_CHANGED =>
+        WaylandToplevelEventKind.changed,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_UNMAPPED =>
+        WaylandToplevelEventKind.unmapped,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ACTIVATION_REQUESTED =>
+        WaylandToplevelEventKind.activationRequested,
+      IhsWlToplevelEvent.IHS_WL_TOPLEVEL_EVENT_ATTENTION_REQUESTED =>
+        WaylandToplevelEventKind.attentionRequested,
+    };
+    _toplevelEvents.add(
+      WaylandToplevelEvent(
+        kind,
+        id,
+        kind == WaylandToplevelEventKind.unmapped ? null : toplevel(id),
+      ),
+    );
+  }
 
   /// The window [id]; null once it is gone or the server is stopped.
   WaylandToplevel? toplevel(int id) => using((Arena arena) {
